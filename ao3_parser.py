@@ -190,15 +190,14 @@ def _collect_work_ids_and_titles_from_page(soup: BeautifulSoup, base: str) -> li
         title = re.sub(r"(\w)by(\w)", r"\1 by \2", title, flags=re.IGNORECASE)
         results.append({"work_id": work_id, "work_title": title, "work_url": full_url})
 
-    # 1) Стандартная структура AO3: ol.work > li.blurb, внутри .heading a или первая ссылка на work
+    # 1) Собираем из li.blurb (одна работа на blurb — первая ссылка на work)
     for blurb in soup.select("li.blurb"):
         for a in blurb.select("a[href*='works/']"):
             add_work(a)
-            break  # одна работа на blurb — берём первую подходящую ссылку
-    # 2) Fallback: любые ссылки на /works/ID (если blurbs не нашлись)
-    if not results:
-        for a in soup.select("a[href*='works/']"):
-            add_work(a)
+            break
+    # 2) Добираем все остальные ссылки на /works/ID по всей странице (на случай другой вёрстки)
+    for a in soup.select("a[href*='works/']"):
+        add_work(a)
     return results
 
 

@@ -11,6 +11,7 @@ def _default_state(tracked_user: str = "") -> dict[str, Any]:
         "last_check_timestamp": datetime.now(tz=timezone.utc).isoformat(),
         "known_comments": {},
         "notification_target": None,
+        "initial_seed_done": False,
     }
 
 
@@ -27,6 +28,9 @@ def load_state(state_file: str, tracked_user: str = "") -> dict[str, Any]:
             data["notification_target"] = None
         if "tracked_user" not in data and tracked_user:
             data["tracked_user"] = tracked_user
+        # Если уже есть известные комментарии — считаем, что первичное заполнение было
+        if "initial_seed_done" not in data:
+            data["initial_seed_done"] = bool(data.get("known_comments"))
         return data
     except (json.JSONDecodeError, OSError) as e:
         # Return default on corrupt/missing; caller can re-save

@@ -6,7 +6,7 @@ from typing import Any
 import telebot
 from telebot.apihelper import ApiTelegramException
 
-from utils import escape_markdown_v2
+from utils import escape_html
 
 logger = logging.getLogger(__name__)
 
@@ -32,22 +32,20 @@ def _get_bot() -> telebot.TeleBot:
 
 
 def _format_notification(comment_data: dict[str, Any]) -> str:
-    """Build MarkdownV2 message; all user content must be escaped."""
-    title = escape_markdown_v2(comment_data.get("work_title") or "Untitled")
-    url = escape_markdown_v2(comment_data.get("work_url") or "")
-    author = escape_markdown_v2(comment_data.get("author") or "Anonymous")
-    date = escape_markdown_v2(comment_data.get("date") or "—")
+    """Build HTML message; текст комментария — в <blockquote> (блок цитаты в Telegram)."""
+    title = escape_html(comment_data.get("work_title") or "Untitled")
+    url = (comment_data.get("work_url") or "").replace("&", "&amp;")
+    author = escape_html(comment_data.get("author") or "Anonymous")
+    date = escape_html(comment_data.get("date") or "—")
     raw_text = comment_data.get("text") or ""
-    # Каждая строка в blockquote: "> строка" (MarkdownV2)
-    text_lines = [escape_markdown_v2(line) for line in raw_text.split("\n")]
-    text_block = "\n".join("\\> " + line for line in text_lines) if text_lines else "\\> "
+    text_escaped = escape_html(raw_text)
     return (
-        "*Новый комментарий на AO3*\n\n"
-        "*Работа:* [" + title + "](" + url + ")\n"
-        "*Автор:* " + author + "\n"
-        "*Когда:* " + date + "\n\n"
-        "*Текст:*\n"
-        + text_block + "\n"
+        "<b>Новый комментарий на AO3</b>\n\n"
+        "<b>Работа:</b> <a href=\"" + url + "\">" + title + "</a>\n"
+        "<b>Автор:</b> " + author + "\n"
+        "<b>Когда:</b> " + date + "\n\n"
+        "<b>Текст:</b>\n"
+        "<blockquote>" + text_escaped + "</blockquote>"
     )
 
 
@@ -66,7 +64,7 @@ def send_comment_notification(
                 chat_id=chat_id,
                 message_thread_id=message_thread_id,
                 text=text,
-                parse_mode="MarkdownV2",
+                parse_mode="HTML",
             )
             logger.info("[Telegram] Уведомление отправлено: работа %s", comment_data.get("work_id"))
             return True

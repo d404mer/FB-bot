@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import time
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urljoin
 
 import requests
@@ -41,22 +42,66 @@ WORK_LINK_RE = re.compile(r"/?works/(\d+)")
 PAGINATION_PAGE_RE = re.compile(r"[?&]page=(\d+)")
 
 
+# МСК = UTC+3
+MSK = timezone(timedelta(hours=3))
+# Короткие названия месяцев по-русски
+MONTH_RU = ("янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
+# Английские месяцы AO3 -> номер
+MONTH_EN = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
+# Часовой пояс в тексте AO3 -> смещение от UTC (часы)
+TZ_OFFSET = {"utc": 0, "est": -5, "edt": -4, "cst": -6, "cdt": -5, "mst": -7, "mdt": -6, "pst": -8, "pdt": -7, "gmt": 0}
+
+
+def _parse_ao3_text_date(raw: str) -> datetime | None:
+    """Парсит формат AO3: 'Sat 31 Jan 2026 08:23 PM UTC' или '31 Jan 2026 03:23PM EST'."""
+    # DD Mon YYYY HH:MM AM/PM TZ или DD Mon YYYY HH:MMAM TZ (пробел перед AM/PM необязателен)
+    m = re.search(r"(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)\s*([A-Za-z]+)?", raw, re.IGNORECASE)
+    if not m:
+        return None
+    try:
+        day, mon_str, year = int(m.group(1)), m.group(2).lower()[:3], int(m.group(3))
+        hour, minute = int(m.group(4)), int(m.group(5))
+        ampm = m.group(6).upper()
+        tz_name = (m.group(7) or "UTC").upper()[:3]
+        if ampm == "PM" and hour != 12:
+            hour += 12
+        elif ampm == "AM" and hour == 12:
+            hour = 0
+        month = MONTH_EN.get(mon_str)
+        if not month:
+            return None
+        offset_hours = TZ_OFFSET.get(tz_name.lower(), 0)
+        tz = timezone(timedelta(hours=offset_hours))
+        dt = datetime(year, month, day, hour, minute, 0, 0, tzinfo=tz)
+        return dt
+    except (ValueError, KeyError):
+        return None
+
+
 def _normalize_date_display(raw: str) -> str:
-    """Приводит дату к виду с пробелами (Sat 31 Jan 2026 06:14 PM)."""
+    """Дата и время в МСК, на русском (например: 31 янв 2026, 23:23)."""
     if not raw or not raw.strip():
         return "—"
     raw = raw.strip()
-    # ISO: 2026-01-31T18:14:00Z -> 31 Jan 2026, 18:14
-    if "T" in raw[:25] and "-" in raw[:10]:
+    # 1) Текстовый формат AO3: "Sat 31 Jan 2026 08:23 PM UTC" или "31 Jan 2026 03:23PM EST"
+    dt = _parse_ao3_text_date(raw)
+    if dt is not None:
+        dt_msk = dt.astimezone(MSK)
+        mon = MONTH_RU[dt_msk.month - 1]
+        return f"{dt_msk.day} {mon} {dt_msk.year}, {dt_msk.hour:02d}:{dt_msk.minute:02d}"
+    # 2) ISO от AO3: 2026-01-31T18:14:00Z
+    if "T" in raw[:30] and re.match(r"\d{4}-\d{2}-\d{2}", raw):
         try:
-            from datetime import datetime
-            iso = raw[:19].replace("Z", "")
-            dt = datetime.fromisoformat(iso)
-            return dt.strftime("%d %b %Y, %H:%M")
+            iso_core = raw[:19].replace(" ", "T")
+            if len(iso_core) >= 16 and iso_core[10] in "T ":
+                dt_utc = datetime.fromisoformat(iso_core.replace(" ", "T")).replace(tzinfo=timezone.utc)
+                dt_msk = dt_utc.astimezone(MSK)
+                mon = MONTH_RU[dt_msk.month - 1]
+                return f"{dt_msk.day} {mon} {dt_msk.year}, {dt_msk.hour:02d}:{dt_msk.minute:02d}"
         except Exception:
             pass
-    # Склеенный вид Sat31Jan202606:14PM -> вставляем пробелы
-    raw = re.sub(r"(\d{4})(\d{2}:\d{2})", r"\1 \2", raw)  # 202606:14 -> 2026 06:14
+    # 3) Не удалось распарсить — возвращаем с пробелами (склеенный вид)
+    raw = re.sub(r"(\d{4})(\d{2}:\d{2})", r"\1 \2", raw)
     out = []
     for i, c in enumerate(raw):
         if i > 0 and c.isupper() and (raw[i - 1].islower() or raw[i - 1].isdigit()):

@@ -51,25 +51,35 @@ def main() -> None:
             else:
                 logger.warning("[Цикл] Топик не задан")
             new_count = 0
-            for c in comments:
-                ch = utils.comment_hash(c["author"], c["date"], c["text"])
-                if state_manager.is_comment_known(state, c["work_id"], ch):
-                    continue
-                new_count += 1
-                if target is None:
-                    if new_count == 1:
-                        logger.warning("Топик не задан, пропуск отправки уведомлений. Выполните /set_topic в нужном топике.")
-                    continue
-                logger.info("[Цикл] Новый комментарий: работа %s, автор %s", c["work_id"], c["author"])
-                ok = bot_client.send_comment_notification(target[0], target[1], c)
-                if ok:
+            # Первый запуск: запомнить все текущие комментарии без отправки (не реагировать на старые)
+            if not state.get("initial_seed_done"):
+                for c in comments:
+                    ch = utils.comment_hash(c["author"], c["date"], c["text"])
                     state_manager.add_known_comment(state, c["work_id"], ch)
-                    logger.info("[Цикл] Уведомление отправлено в Telegram")
-                else:
-                    logger.warning("[Цикл] Не удалось отправить уведомление")
-                time.sleep(NOTIFICATION_DELAY_SECONDS)
-            state["last_check_timestamp"] = datetime.now(tz=timezone.utc).isoformat()
-            state_manager.save_state(state, state_file)
+                state["initial_seed_done"] = True
+                state["last_check_timestamp"] = datetime.now(tz=timezone.utc).isoformat()
+                state_manager.save_state(state, state_file)
+                logger.info("[Цикл] Первый запуск: запомнены все текущие комментарии (%s), уведомления не отправлялись", len(comments))
+            else:
+                for c in comments:
+                    ch = utils.comment_hash(c["author"], c["date"], c["text"])
+                    if state_manager.is_comment_known(state, c["work_id"], ch):
+                        continue
+                    new_count += 1
+                    if target is None:
+                        if new_count == 1:
+                            logger.warning("Топик не задан, пропуск отправки уведомлений. Выполните /set_topic в нужном топике.")
+                        continue
+                    logger.info("[Цикл] Новый комментарий: работа %s, автор %s", c["work_id"], c["author"])
+                    ok = bot_client.send_comment_notification(target[0], target[1], c)
+                    if ok:
+                        state_manager.add_known_comment(state, c["work_id"], ch)
+                        logger.info("[Цикл] Уведомление отправлено в Telegram")
+                    else:
+                        logger.warning("[Цикл] Не удалось отправить уведомление")
+                    time.sleep(NOTIFICATION_DELAY_SECONDS)
+                state["last_check_timestamp"] = datetime.now(tz=timezone.utc).isoformat()
+                state_manager.save_state(state, state_file)
             logger.info("[Цикл] Состояние сохранено, следующий цикл через %s с", cfg["CHECK_INTERVAL"])
             if new_count:
                 logger.info("[Цикл] Обработано новых комментариев: %s", new_count)

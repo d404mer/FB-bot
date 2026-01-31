@@ -29,6 +29,13 @@ def escape_markdown_v2(text: str) -> str:
     return MARKDOWN_V2_ESCAPE.sub(r"\\\1", text)
 
 
+def escape_html(text: str) -> str:
+    """Escape <, >, & for Telegram HTML."""
+    if not text:
+        return ""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def setup_logging(log_file: str | None = None) -> None:
     """Configure root logger: console + optional file, with level and format."""
     fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"

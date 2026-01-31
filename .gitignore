@@ -1,0 +1,9 @@
+config.ini
+bot_state.json
+bot.log
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.tmp
+ao3_last_page.html

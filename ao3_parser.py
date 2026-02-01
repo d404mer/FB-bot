@@ -1,8 +1,9 @@
-"""Parse AO3: user works list and comments per work. Uses requests + BeautifulSoup."""
+"""Parse AO3: user works list and comments per work. Uses requests + BeautifulSoup; optional ao3_api for work list and parallel fetch."""
 import logging
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urljoin
 
@@ -12,6 +13,15 @@ from bs4 import BeautifulSoup
 from utils import comment_hash, safe_delay
 
 logger = logging.getLogger(__name__)
+
+# Параллельная загрузка страниц с комментариями (батчами), чтобы не превышать лимит AO3
+PARALLEL_WORKERS = 2
+
+try:
+    import AO3
+    _HAS_AO3_API = True
+except ImportError:
+    _HAS_AO3_API = False
 
 BASE_URL = "https://archiveofourown.org"
 # Chrome User-Agent часто лучше проходит через Cloudflare, чем Firefox
@@ -201,6 +211,39 @@ def _collect_work_ids_and_titles_from_page(soup: BeautifulSoup, base: str) -> li
     return results
 
 
+def _get_works_via_api(username: str, request_delay: float) -> list[dict]:
+    """Получить список работ через ao3_api Search(author=...). По 20 работ на страницу."""
+    if not _HAS_AO3_API:
+        return []
+    all_works: list[dict] = []
+    seen_ids: set[str] = set()
+    page = 1
+    try:
+        while True:
+            search = AO3.Search(author=username, page=page)
+            logger.info("[AO3 API] Поиск работ по автору %s, страница %s", username, page)
+            search.update()
+            safe_delay(request_delay, jitter=2.0)
+            if not search.results:
+                break
+            for work in search.results:
+                work_id = str(getattr(work, "id", "") or "").strip()
+                if not work_id or work_id in seen_ids:
+                    continue
+                seen_ids.add(work_id)
+                title = getattr(work, "title", None) or "Untitled"
+                work_url = f"{BASE_URL}/works/{work_id}"
+                all_works.append({"work_id": work_id, "work_title": title, "work_url": work_url})
+            if page >= getattr(search, "pages", 0):
+                break
+            page += 1
+        logger.info("[AO3 API] Всего работ у пользователя %s: %s", username, len(all_works))
+    except Exception as e:
+        logger.warning("[AO3 API] Ошибка при получении списка работ: %s", e)
+        return []
+    return all_works
+
+
 def _get_all_works_pages(session: requests.Session, username: str, request_delay: float) -> list[dict]:
     """Fetch all works list pages and return list of {work_id, work_title, work_url}."""
     all_works: list[dict] = []
@@ -320,21 +363,52 @@ def _get_comments_from_work_page(
     return comments
 
 
+def _fetch_comments_for_work(work: dict, request_delay: float) -> list[dict]:
+    """Загрузить комментарии одной работы (собственная сессия для потока)."""
+    session = _session()
+    safe_delay(request_delay, jitter=1.0)
+    return _get_comments_from_work_page(
+        session, work["work_id"], work["work_title"], work["work_url"]
+    )
+
+
 def get_all_comments_for_user(username: str, request_delay: float = 7.0) -> list[dict]:
     """
     Fetch all works for user, then all comments for each work.
+    Uses ao3_api Search(author=...) for work list if available; fetches comment pages in parallel (batches of PARALLEL_WORKERS).
     Returns list of comment dicts: work_id, work_title, work_url, author, date, text, comment_id.
     """
-    session = _session()
     logger.info("[AO3] Начинаем сбор комментариев для пользователя %s", username)
-    works = _get_all_works_pages(session, username, request_delay)
+    if _HAS_AO3_API:
+        works = _get_works_via_api(username, request_delay)
+        if works:
+            logger.info("[AO3] Список работ получен через ao3_api (%s работ)", len(works))
+    if not _HAS_AO3_API or not works:
+        session = _session()
+        works = _get_all_works_pages(session, username, request_delay)
     if not works:
         logger.warning("[AO3] Работ не найдено для пользователя %s", username)
         return []
     all_comments: list[dict] = []
-    for w in works:
-        safe_delay(request_delay, jitter=2.0)
-        comments = _get_comments_from_work_page(session, w["work_id"], w["work_title"], w["work_url"])
-        all_comments.extend(comments)
+    workers = min(PARALLEL_WORKERS, len(works))
+    if workers <= 1:
+        session = _session()
+        for w in works:
+            safe_delay(request_delay, jitter=2.0)
+            comments = _get_comments_from_work_page(session, w["work_id"], w["work_title"], w["work_url"])
+            all_comments.extend(comments)
+    else:
+        # Батчами: PARALLEL_WORKERS работ параллельно, затем пауза request_delay
+        for i in range(0, len(works), workers):
+            batch = works[i : i + workers]
+            with ThreadPoolExecutor(max_workers=len(batch)) as executor:
+                futures = [executor.submit(_fetch_comments_for_work, w, 0) for w in batch]
+                for future in as_completed(futures):
+                    try:
+                        all_comments.extend(future.result())
+                    except Exception as e:
+                        logger.warning("[AO3] Ошибка загрузки комментариев: %s", e)
+            if i + workers < len(works):
+                safe_delay(request_delay, jitter=2.0)
     logger.info("[AO3] Всего комментариев: %s", len(all_comments))
     return all_comments

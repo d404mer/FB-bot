@@ -40,8 +40,12 @@ def _is_chat_admin(bot: telebot.TeleBot, chat_id: int, user_id: int) -> bool:
         return False
 
 
+# Порог длины комментария (символов): выше — сворачиваемая цитата (Collapsible Quote), ниже — обычная цитата
+COLLAPSIBLE_QUOTE_MIN_LENGTH = 280
+
+
 def _format_notification(comment_data: dict[str, Any]) -> str:
-    """Build HTML message; текст комментария — в <blockquote>. Поддержка type: comment / kudos (Inbox)."""
+    """Build HTML message; длинные комментарии — в <blockquote expandable> (раскрываемая цитата). Поддержка type: comment / kudos (Inbox)."""
     title = escape_html(comment_data.get("work_title") or "Untitled")
     url = (comment_data.get("work_url") or "").replace("&", "&amp;")
     author = escape_html(comment_data.get("author") or "Anonymous")
@@ -56,13 +60,18 @@ def _format_notification(comment_data: dict[str, Any]) -> str:
             "<b>Кто:</b> " + author + "\n"
             "<b>Когда:</b> " + date
         )
+    # Длинные комментарии — раскрываемая цитата (Collapsible Quote), короткие — обычная цитата
+    if len(raw_text.strip()) >= COLLAPSIBLE_QUOTE_MIN_LENGTH:
+        quote_tag = "<blockquote expandable>"
+    else:
+        quote_tag = "<blockquote>"
     return (
-        "<b>Новый комментарий на AO3</b>\n\n"
+        "<b>💬 Новый комментарий на AO3</b>\n\n"
         "<b>Работа:</b> <a href=\"" + url + "\">" + title + "</a>\n"
         "<b>Автор:</b> " + author + "\n"
         "<b>Когда:</b> " + date + "\n\n"
         "<b>Текст:</b>\n"
-        "<blockquote>" + text_escaped + "</blockquote>"
+        + quote_tag + text_escaped + "</blockquote>"
     )
 
 

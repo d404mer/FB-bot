@@ -28,7 +28,7 @@ def load_config(path: str | None = None) -> dict:
     check_interval_raw = (os.environ.get("CHECK_INTERVAL") or (get("APP", "CHECK_INTERVAL", "180") if has_ini else "180") or "180").strip()
     request_delay_raw = (os.environ.get("REQUEST_DELAY") or (get("AO3", "REQUEST_DELAY", "4") if has_ini else "15") or "15").strip()
     state_file = (os.environ.get("STATE_FILE") or (get("APP", "STATE_FILE", "bot_state.json") if has_ini else "bot_state.json") or "bot_state.json").strip()
-    log_file_raw = os.environ.get("LOG_FILE") or (get("APP", "LOG_FILE", "bot.log") if has_ini else None
+    log_file_raw = os.environ.get("LOG_FILE") or (get("APP", "LOG_FILE", "bot.log") if has_ini else None)
     log_file = log_file_raw.strip() if log_file_raw else None
 
     try:

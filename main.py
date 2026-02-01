@@ -35,49 +35,68 @@ def main() -> None:
     poll_thread = threading.Thread(target=bot_client.start_polling, args=(bot,), daemon=True)
     poll_thread.start()
 
+    logger.info("[Цикл] Режим: только Inbox, только комментарии")
+
+    ao3_session = ao3_parser.create_ao3_session(cfg["AO3_USERNAME"], cfg["AO3_PASSWORD"])
+    if ao3_session is None:
+        logger.error("Не удалось войти в AO3. Проверьте USERNAME и PASSWORD в config.ini.")
+        sys.exit(1)
+    logger.info("[AO3] Вход выполнен один раз на всю сессию; сессия будет использоваться до завершения программы")
+
     while True:
         try:
             logger.info("[Цикл] Начало проверки")
             state = state_manager.load_state(state_file, cfg["AO3_USERNAME"])
             state["tracked_user"] = cfg["AO3_USERNAME"]
-            comments = ao3_parser.get_all_comments_for_user(cfg["AO3_USERNAME"], cfg["REQUEST_DELAY"])
-            logger.info("[Цикл] Загружено комментариев: %s", len(comments))
+            raw = ao3_parser.get_notifications_from_inbox(
+                ao3_session, cfg["AO3_USERNAME"], cfg["REQUEST_DELAY"]
+            )
+            if raw is None:
+                logger.warning("[Цикл] Inbox недоступен (сеть/сессия?), пропуск цикла")
+                time.sleep(cfg["CHECK_INTERVAL"])
+                continue
+            comments = [c for c in raw if c.get("notification_type") == "comment"]
+            logger.info("[Цикл] Загружено комментариев из Inbox: %s", len(comments))
             # Перезагружаем состояние после долгой проверки — топик мог быть задан через /set_topic пока мы парсили
             state = state_manager.load_state(state_file, cfg["AO3_USERNAME"])
             state["tracked_user"] = cfg["AO3_USERNAME"]
-            target = state_manager.get_notification_target(state)
-            if target:
-                logger.info("[Цикл] Топик задан: chat_id=%s, thread_id=%s", target[0], target[1])
+            targets = state_manager.get_notification_targets(state)
+            if targets:
+                logger.info("[Цикл] Топиков для уведомлений: %s", len(targets))
             else:
-                logger.warning("[Цикл] Топик не задан")
+                logger.warning("[Цикл] Нет подписанных топиков. Выполните /set_topic в нужных чатах/топиках.")
             new_count = 0
-            # Первый запуск: запомнить все текущие комментарии без отправки (не реагировать на старые)
+            # Первый запуск: запомнить все текущие комментарии без отправки — отправляем только те, что появятся после запуска бота
             if not state.get("initial_seed_done"):
                 for c in comments:
-                    ch = utils.comment_hash(c["author"], c["date"], c["text"])
+                    ch = c.get("comment_id") or utils.comment_hash(c["author"], c["date"], c["text"])
                     state_manager.add_known_comment(state, c["work_id"], ch)
                 state["initial_seed_done"] = True
                 state["last_check_timestamp"] = datetime.now(tz=timezone.utc).isoformat()
                 state_manager.save_state(state, state_file)
-                logger.info("[Цикл] Первый запуск: запомнены все текущие комментарии (%s), уведомления не отправлялись", len(comments))
+                logger.info("[Цикл] Первый запуск: запомнены все текущие комментарии (%s). Уведомления только о новых (после запуска).", len(comments))
             else:
                 for c in comments:
-                    ch = utils.comment_hash(c["author"], c["date"], c["text"])
+                    ch = c.get("comment_id") or utils.comment_hash(c["author"], c["date"], c["text"])
                     if state_manager.is_comment_known(state, c["work_id"], ch):
                         continue
                     new_count += 1
-                    if target is None:
+                    if not targets:
                         if new_count == 1:
-                            logger.warning("Топик не задан, пропуск отправки уведомлений. Выполните /set_topic в нужном топике.")
+                            logger.warning("Нет подписанных топиков, пропуск отправки. Выполните /set_topic в нужных чатах.")
                         continue
                     logger.info("[Цикл] Новый комментарий: работа %s, автор %s", c["work_id"], c["author"])
-                    ok = bot_client.send_comment_notification(target[0], target[1], c)
-                    if ok:
+                    sent_any = False
+                    for chat_id, thread_id in targets:
+                        ok = bot_client.send_comment_notification(chat_id, thread_id, c)
+                        if ok:
+                            sent_any = True
+                        time.sleep(NOTIFICATION_DELAY_SECONDS)
+                    if sent_any:
                         state_manager.add_known_comment(state, c["work_id"], ch)
-                        logger.info("[Цикл] Уведомление отправлено в Telegram")
+                        logger.info("[Цикл] Уведомление отправлено во все подписанные топики")
                     else:
-                        logger.warning("[Цикл] Не удалось отправить уведомление")
-                    time.sleep(NOTIFICATION_DELAY_SECONDS)
+                        logger.warning("[Цикл] Не удалось отправить уведомление ни в один топик")
                 state["last_check_timestamp"] = datetime.now(tz=timezone.utc).isoformat()
                 state_manager.save_state(state, state_file)
             logger.info("[Цикл] Состояние сохранено, следующий цикл через %s с", cfg["CHECK_INTERVAL"])

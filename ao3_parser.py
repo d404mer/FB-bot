@@ -1,8 +1,9 @@
-"""Parse AO3: user works list and comments per work. Uses requests + BeautifulSoup."""
+"""Parse AO3: user works list and comments per work. Uses requests + BeautifulSoup; optional ao3_api for work list and parallel fetch."""
 import logging
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urljoin
 
@@ -13,7 +14,21 @@ from utils import comment_hash, safe_delay
 
 logger = logging.getLogger(__name__)
 
+# Параллельная загрузка страниц с комментариями (батчами), чтобы не превышать лимит AO3
+PARALLEL_WORKERS = 2
+
+try:
+    import AO3
+    _HAS_AO3_API = True
+except ImportError:
+    _HAS_AO3_API = False
+
 BASE_URL = "https://archiveofourown.org"
+
+
+def _get_inbox_url(username: str) -> str:
+    """URL страницы Inbox пользователя: /users/USERNAME/inbox"""
+    return f"{BASE_URL}/users/{username}/inbox"
 # Chrome User-Agent часто лучше проходит через Cloudflare, чем Firefox
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -35,7 +50,7 @@ DEFAULT_HEADERS = {
 }
 RETRY_DELAY = 25   # секунд между повторами при 5xx
 MAX_RETRIES = 3    # при 525 — не висеть дольше ~2 мин
-REQUEST_TIMEOUT = 30  # секунд на один запрос, чтобы не зависать
+REQUEST_TIMEOUT = 60  # секунд на один запрос (AO3/Cloudflare иногда отвечают медленно)
 
 # Selectors: AO3 uses ol.work > li.blurb, внутри — ссылка на /works/ID или works/ID
 WORK_LINK_RE = re.compile(r"/?works/(\d+)")
@@ -163,6 +178,156 @@ def _get_work_page_url(work_id: str) -> str:
     return f"{BASE_URL}/works/{work_id}?view_full_work=true&show_comments=true"
 
 
+# --- Inbox (сессия AO3): парсинг страницы уведомлений ---
+
+
+def create_ao3_session(username: str, password: str):
+    """Создать авторизованную сессию AO3 (ao3_api). При ошибке логина возвращает None."""
+    if not _HAS_AO3_API or not username or not password:
+        return None
+    try:
+        sess = AO3.Session(username, password)
+        logger.info("[AO3] Сессия создана для пользователя %s", username)
+        return sess
+    except Exception as e:
+        logger.warning("[AO3] Не удалось войти (сессия): %s", e)
+        return None
+
+
+def _get_inbox_html(session, username: str) -> str | None:
+    """Загрузить HTML страницы Inbox пользователя через авторизованную сессию ao3_api. С повторами при таймауте/5xx."""
+    url = _get_inbox_url(username)
+    last_error = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            if attempt > 0:
+                logger.info("[AO3 Inbox] Повтор запроса (попытка %s/%s)", attempt + 1, MAX_RETRIES)
+                time.sleep(RETRY_DELAY)
+            req = session.get(url, timeout=REQUEST_TIMEOUT)
+            if 500 <= req.status_code < 600:
+                last_error = f"HTTP {req.status_code}"
+                if attempt < MAX_RETRIES - 1:
+                    logger.warning("[AO3 Inbox] %s, повтор через %s с", last_error, RETRY_DELAY)
+                continue
+            if req.status_code != 200:
+                logger.warning("[AO3 Inbox] HTTP %s: %s", req.status_code, url)
+                return None
+            return req.text
+        except requests.exceptions.Timeout as e:
+            last_error = e
+            if attempt < MAX_RETRIES - 1:
+                logger.warning("[AO3 Inbox] Таймаут, повтор через %s с (попытка %s/%s)", RETRY_DELAY, attempt + 1, MAX_RETRIES)
+        except Exception as e:
+            last_error = e
+            if attempt < MAX_RETRIES - 1:
+                logger.warning("[AO3 Inbox] Ошибка загрузки: %s, повтор через %s с", e, RETRY_DELAY)
+            else:
+                logger.warning("[AO3 Inbox] Ошибка загрузки: %s", e)
+                return None
+    if last_error is not None:
+        logger.warning("[AO3 Inbox] Не удалось после %s попыток: %s", MAX_RETRIES, last_error)
+    return None
+
+
+# id элемента комментария в Inbox: feedback_comment_1106757276
+FEEDBACK_COMMENT_ID_RE = re.compile(r"feedback_comment_(\d+)")
+
+
+def _parse_inbox_notifications(soup: BeautifulSoup, base_url: str = BASE_URL) -> list[dict]:
+    """
+    Распарсить HTML Inbox AO3 (реальная разметка).
+    Контейнер: ol.comment.index.group; каждый элемент: li.comment[role=article] id=feedback_comment_XXX.
+    Внутри: h4.heading.byline (первая a — автор, вторая a — работа /works/ID/comments/...), span.posted.datetime, blockquote.userstuff.
+    """
+    results: list[dict] = []
+    seen_ids: set[str] = set()
+
+    ol = soup.select_one("ol.comment.index.group")
+    if not ol:
+        logger.debug("[AO3 Inbox] Контейнер ol.comment.index.group не найден")
+        return results
+
+    for li in ol.select("li.comment[role='article']"):
+        try:
+            # id="feedback_comment_1106757276" — уникальный ID комментария на AO3
+            li_id = li.get("id") or ""
+            comment_aid = ""
+            mo = FEEDBACK_COMMENT_ID_RE.search(li_id)
+            if mo:
+                comment_aid = mo.group(1)
+
+            byline = li.select_one("h4.heading.byline")
+            if not byline:
+                continue
+            links = byline.select("a")
+            if len(links) < 2:
+                continue
+            author_a, work_a = links[0], links[1]
+            author = (author_a.get_text(strip=True) or "Anonymous").replace("\n", " ")
+            work_href = (work_a.get("href") or "").strip()
+            work_title = (work_a.get_text(strip=True) or "Untitled").replace("\n", " ")[:200]
+            work_mo = WORK_LINK_RE.search(work_href)
+            if not work_mo:
+                continue
+            work_id = work_mo.group(1)
+            work_url = f"{base_url}/works/{work_id}"
+
+            date_el = li.select_one("span.posted.datetime")
+            date_str = (date_el.get_text(strip=True) if date_el else "").strip() or "—"
+            # относительные даты вроде "3 minutes ago" оставляем как есть; при желании можно нормализовать позже
+            if date_str and date_str != "—":
+                date_str = _normalize_date_display(date_str) or date_str
+
+            text_el = li.select_one("blockquote.userstuff")
+            text = (text_el.get_text(separator="\n", strip=True) if text_el else "").strip() or ""
+
+            cid = comment_aid or comment_hash(author, date_str, (text or "")[:200])
+            if cid in seen_ids:
+                continue
+            seen_ids.add(cid)
+
+            results.append({
+                "work_id": work_id,
+                "work_title": work_title,
+                "work_url": work_url,
+                "author": author or "Anonymous",
+                "date": date_str,
+                "text": text or "",
+                "comment_id": cid,
+                "notification_type": "comment",
+            })
+        except Exception as e:
+            logger.debug("[AO3 Inbox] Ошибка разбора блока: %s", e)
+            continue
+
+    return results
+
+
+def get_notifications_from_inbox(session, username: str, request_delay: float = 7.0) -> list[dict] | None:
+    """
+    Получить уведомления из Inbox через уже авторизованную сессию AO3.
+    Сессия не создаётся внутри — вызывающий должен один раз войти (create_ao3_session) и передавать session.
+    Возвращает список словарей в формате комментариев + notification_type, или None при ошибке загрузки.
+    """
+    safe_delay(request_delay, jitter=2.0)
+    html = _get_inbox_html(session, username)
+    if not html:
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    notifications = _parse_inbox_notifications(soup)
+    logger.info("[AO3 Inbox] Загружено уведомлений: %s", len(notifications))
+    if not notifications:
+        # Отладка: сохранить HTML при пустом результате (разметка могла измениться)
+        try:
+            debug_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ao3_inbox_last.html")
+            with open(debug_path, "w", encoding="utf-8") as f:
+                f.write(html)
+            logger.debug("[AO3 Inbox] Пустой список; HTML сохранён в ao3_inbox_last.html")
+        except OSError:
+            pass
+    return notifications
+
+
 def _collect_work_ids_and_titles_from_page(soup: BeautifulSoup, base: str) -> list[dict]:
     """Extract work_id, work_title, work_url from one works list page. AO3: ol.work > li.blurb."""
     results = []
@@ -199,6 +364,39 @@ def _collect_work_ids_and_titles_from_page(soup: BeautifulSoup, base: str) -> li
     for a in soup.select("a[href*='works/']"):
         add_work(a)
     return results
+
+
+def _get_works_via_api(username: str, request_delay: float) -> list[dict]:
+    """Получить список работ через ao3_api Search(author=...). По 20 работ на страницу."""
+    if not _HAS_AO3_API:
+        return []
+    all_works: list[dict] = []
+    seen_ids: set[str] = set()
+    page = 1
+    try:
+        while True:
+            search = AO3.Search(author=username, page=page)
+            logger.info("[AO3 API] Поиск работ по автору %s, страница %s", username, page)
+            search.update()
+            safe_delay(request_delay, jitter=2.0)
+            if not search.results:
+                break
+            for work in search.results:
+                work_id = str(getattr(work, "id", "") or "").strip()
+                if not work_id or work_id in seen_ids:
+                    continue
+                seen_ids.add(work_id)
+                title = getattr(work, "title", None) or "Untitled"
+                work_url = f"{BASE_URL}/works/{work_id}"
+                all_works.append({"work_id": work_id, "work_title": title, "work_url": work_url})
+            if page >= getattr(search, "pages", 0):
+                break
+            page += 1
+        logger.info("[AO3 API] Всего работ у пользователя %s: %s", username, len(all_works))
+    except Exception as e:
+        logger.warning("[AO3 API] Ошибка при получении списка работ: %s", e)
+        return []
+    return all_works
 
 
 def _get_all_works_pages(session: requests.Session, username: str, request_delay: float) -> list[dict]:
@@ -320,21 +518,52 @@ def _get_comments_from_work_page(
     return comments
 
 
+def _fetch_comments_for_work(work: dict, request_delay: float) -> list[dict]:
+    """Загрузить комментарии одной работы (собственная сессия для потока)."""
+    session = _session()
+    safe_delay(request_delay, jitter=1.0)
+    return _get_comments_from_work_page(
+        session, work["work_id"], work["work_title"], work["work_url"]
+    )
+
+
 def get_all_comments_for_user(username: str, request_delay: float = 7.0) -> list[dict]:
     """
     Fetch all works for user, then all comments for each work.
+    Uses ao3_api Search(author=...) for work list if available; fetches comment pages in parallel (batches of PARALLEL_WORKERS).
     Returns list of comment dicts: work_id, work_title, work_url, author, date, text, comment_id.
     """
-    session = _session()
     logger.info("[AO3] Начинаем сбор комментариев для пользователя %s", username)
-    works = _get_all_works_pages(session, username, request_delay)
+    if _HAS_AO3_API:
+        works = _get_works_via_api(username, request_delay)
+        if works:
+            logger.info("[AO3] Список работ получен через ao3_api (%s работ)", len(works))
+    if not _HAS_AO3_API or not works:
+        session = _session()
+        works = _get_all_works_pages(session, username, request_delay)
     if not works:
         logger.warning("[AO3] Работ не найдено для пользователя %s", username)
         return []
     all_comments: list[dict] = []
-    for w in works:
-        safe_delay(request_delay, jitter=2.0)
-        comments = _get_comments_from_work_page(session, w["work_id"], w["work_title"], w["work_url"])
-        all_comments.extend(comments)
+    workers = min(PARALLEL_WORKERS, len(works))
+    if workers <= 1:
+        session = _session()
+        for w in works:
+            safe_delay(request_delay, jitter=2.0)
+            comments = _get_comments_from_work_page(session, w["work_id"], w["work_title"], w["work_url"])
+            all_comments.extend(comments)
+    else:
+        # Батчами: PARALLEL_WORKERS работ параллельно, затем пауза request_delay
+        for i in range(0, len(works), workers):
+            batch = works[i : i + workers]
+            with ThreadPoolExecutor(max_workers=len(batch)) as executor:
+                futures = [executor.submit(_fetch_comments_for_work, w, 0) for w in batch]
+                for future in as_completed(futures):
+                    try:
+                        all_comments.extend(future.result())
+                    except Exception as e:
+                        logger.warning("[AO3] Ошибка загрузки комментариев: %s", e)
+            if i + workers < len(works):
+                safe_delay(request_delay, jitter=2.0)
     logger.info("[AO3] Всего комментариев: %s", len(all_comments))
     return all_comments

@@ -6,3 +6,4 @@ __pycache__/
 .pytest_cache/
 *.tmp
 ao3_last_page.html
+ao3_inbox_last.html

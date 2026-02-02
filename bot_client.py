@@ -31,21 +31,47 @@ def _get_bot() -> telebot.TeleBot:
     return _bot
 
 
+def _is_chat_admin(bot: telebot.TeleBot, chat_id: int, user_id: int) -> bool:
+    """Проверить, является ли пользователь администратором чата (только для групп/супергрупп)."""
+    try:
+        admins = bot.get_chat_administrators(chat_id)
+        return any(getattr(m, "user", None) and getattr(m.user, "id", None) == user_id for m in admins)
+    except Exception:
+        return False
+
+
+# Порог длины комментария (символов): выше — сворачиваемая цитата (Collapsible Quote), ниже — обычная цитата
+COLLAPSIBLE_QUOTE_MIN_LENGTH = 280
+
+
 def _format_notification(comment_data: dict[str, Any]) -> str:
-    """Build HTML message; текст комментария — в <blockquote> (блок цитаты в Telegram)."""
+    """Build HTML message; длинные комментарии — в <blockquote expandable> (раскрываемая цитата). Поддержка type: comment / kudos (Inbox)."""
     title = escape_html(comment_data.get("work_title") or "Untitled")
     url = (comment_data.get("work_url") or "").replace("&", "&amp;")
     author = escape_html(comment_data.get("author") or "Anonymous")
     date = escape_html(comment_data.get("date") or "—")
     raw_text = comment_data.get("text") or ""
     text_escaped = escape_html(raw_text)
+    notif_type = (comment_data.get("notification_type") or "comment").lower()
+    if notif_type == "kudos":
+        return (
+            "<b>Кудас на AO3</b>\n\n"
+            "<b>Работа:</b> <a href=\"" + url + "\">" + title + "</a>\n"
+            "<b>Кто:</b> " + author + "\n"
+            "<b>Когда:</b> " + date
+        )
+    # Длинные комментарии — раскрываемая цитата (Collapsible Quote), короткие — обычная цитата
+    if len(raw_text.strip()) >= COLLAPSIBLE_QUOTE_MIN_LENGTH:
+        quote_tag = "<blockquote expandable>"
+    else:
+        quote_tag = "<blockquote>"
     return (
-        "<b>Новый комментарий на AO3</b>\n\n"
+        "<b>💬 Новый комментарий на AO3</b>\n\n"
         "<b>Работа:</b> <a href=\"" + url + "\">" + title + "</a>\n"
         "<b>Автор:</b> " + author + "\n"
         "<b>Когда:</b> " + date + "\n\n"
         "<b>Текст:</b>\n"
-        "<blockquote>" + text_escaped + "</blockquote>"
+        + quote_tag + text_escaped + "</blockquote>"
     )
 
 
@@ -83,23 +109,43 @@ def send_comment_notification(
 
 
 def register_handlers(bot: telebot.TeleBot) -> None:
-    """Register /set_topic and /start handlers."""
+    """Register /set_topic, /unset_topic and /start handlers."""
 
     @bot.message_handler(commands=["set_topic", "start"])
     def on_set_topic(message: telebot.types.Message) -> None:
         chat_id = message.chat.id
-        # In supergroup with topics, message_thread_id is set for the topic
         thread_id = getattr(message, "message_thread_id", None)
-        if message.chat.type in ("supergroup", "group") and thread_id is not None:
-            state = _state_manager.load_state(_state_file)
-            _state_manager.set_notification_target(state, chat_id, thread_id)
-            _state_manager.save_state(state, _state_file)
-            bot.reply_to(message, "Топик для уведомлений установлен. Новые комментарии AO3 будут приходить сюда.")
+        if message.chat.type not in ("supergroup", "group"):
+            bot.reply_to(message, "Добавьте бота в группу (или группу с топиками) и выполните команду там.")
+            return
+        user_id = message.from_user.id if message.from_user else None
+        if user_id is None or not _is_chat_admin(bot, chat_id, user_id):
+            bot.reply_to(message, "Только администраторы группы могут использовать эту команду.")
+            return
+        state = _state_manager.load_state(_state_file)
+        added = _state_manager.add_notification_target(state, chat_id, thread_id or 0)
+        _state_manager.save_state(state, _state_file)
+        if added:
+            bot.reply_to(message, "Топик добавлен. Уведомления о новых комментариях AO3 будут приходить сюда.")
         else:
-            bot.reply_to(
-                message,
-                "Добавьте бота в группу с топиками и выполните команду в нужном топике.",
-            )
+            bot.reply_to(message, "Этот топик уже в списке получателей уведомлений.")
+
+    @bot.message_handler(commands=["unset_topic"])
+    def on_unset_topic(message: telebot.types.Message) -> None:
+        chat_id = message.chat.id
+        thread_id = getattr(message, "message_thread_id", None)
+        if message.chat.type in ("supergroup", "group"):
+            user_id = message.from_user.id if message.from_user else None
+            if user_id is None or not _is_chat_admin(bot, chat_id, user_id):
+                bot.reply_to(message, "Только администраторы группы могут использовать эту команду.")
+                return
+        state = _state_manager.load_state(_state_file)
+        removed = _state_manager.remove_notification_target(state, chat_id, thread_id or 0)
+        _state_manager.save_state(state, _state_file)
+        if removed:
+            bot.reply_to(message, "Топик удалён из списка уведомлений.")
+        else:
+            bot.reply_to(message, "Этот топик не был в списке получателей.")
 
 
 def start_polling(bot: telebot.TeleBot) -> None:

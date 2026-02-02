@@ -13,7 +13,7 @@ CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "config.in
 
 
 def load_config(path: str | None = None) -> dict:
-    """Load config from INI file (if present) and environment variables.
+    """Load config from INI file (if exists) and env vars.
 
     Env vars override INI. If config.ini is missing, works from env only.
     """
@@ -29,7 +29,7 @@ def load_config(path: str | None = None) -> dict:
         except Exception:
             return fallback
 
-    # Environment overrides (common names); переменные окружения имеют приоритет над config.ini
+    # Переменные окружения имеют приоритет; без config.ini всё берётся из env
     bot_token = (os.environ.get("BOT_TOKEN") or (get("TELEGRAM", "BOT_TOKEN") if has_ini else None) or "").strip()
     username = (
         os.environ.get("AO3_USERNAME")
@@ -37,10 +37,9 @@ def load_config(path: str | None = None) -> dict:
         or (get("AO3", "AO3_USERNAME") if has_ini else None)
         or ""
     ).strip()
-    # Optional (used in Inbox mode); keep for forward-compatibility
     password = (os.environ.get("AO3_PASSWORD") or (get("AO3", "PASSWORD") if has_ini else None) or "").strip() or None
     check_interval_raw = (os.environ.get("CHECK_INTERVAL") or (get("APP", "CHECK_INTERVAL", "180") if has_ini else "180") or "180").strip()
-    request_delay_raw = (os.environ.get("REQUEST_DELAY") or (get("AO3", "REQUEST_DELAY", "4") if has_ini else "4") or "4").strip()
+    request_delay_raw = (os.environ.get("REQUEST_DELAY") or (get("AO3", "REQUEST_DELAY", "4") if has_ini else "15") or "15").strip()
     state_file = (os.environ.get("STATE_FILE") or (get("APP", "STATE_FILE", "bot_state.json") if has_ini else "bot_state.json") or "bot_state.json").strip()
     log_file_raw = os.environ.get("LOG_FILE") or (get("APP", "LOG_FILE", "bot.log") if has_ini else None)
     log_file = log_file_raw.strip() if log_file_raw else None
@@ -53,18 +52,31 @@ def load_config(path: str | None = None) -> dict:
         sys.exit(1)
 
     if not bot_token or not username:
+        missing = []
+        if not bot_token:
+            missing.append("BOT_TOKEN")
+        if not username:
+            missing.append("AO3_USERNAME")
         print("BOT_TOKEN and AO3 USERNAME are required. Set in config.ini or environment.")
-        if has_ini:
-            print("  config.ini: [TELEGRAM] BOT_TOKEN = ... and [AO3] USERNAME = ...")
-        else:
+        print("  Missing or empty:", ", ".join(missing))
+        print("  Config source:", "config.ini" if has_ini else "environment only (no config.ini)")
+        if not has_ini:
             print(f"  Config file not found: {path}")
-            print("  Tip: you can run without config.ini by setting env vars: BOT_TOKEN, AO3_USERNAME (and optionally AO3_PASSWORD).")
+            print("  Railway: add variables in Service → Variables (or ensure Shared Variables are linked to this service), then redeploy.")
+        sys.exit(1)
+
+    if not password:
+        print("AO3 PASSWORD is required (бот работает только через Inbox).")
+        print("  Missing or empty: AO3_PASSWORD. Config source:", "config.ini" if has_ini else "environment only")
+        if not has_ini:
+            print(f"  Config file not found: {path}")
+            print("  Railway: add AO3_PASSWORD in Service → Variables, then redeploy.")
         sys.exit(1)
 
     return {
         "BOT_TOKEN": bot_token,
         "AO3_USERNAME": username.strip(),
-        "AO3_PASSWORD": password.strip() if password else None,
+        "AO3_PASSWORD": password.strip(),
         "CHECK_INTERVAL": check_interval,
         "REQUEST_DELAY": request_delay,
         "STATE_FILE": state_file or "bot_state.json",

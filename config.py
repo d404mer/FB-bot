@@ -1,4 +1,9 @@
-"""Load configuration from config.ini and environment variables."""
+"""Load configuration from config.ini and/or environment variables.
+
+Important:
+- `config.ini` is typically gitignored (contains secrets) and may be absent in deployments.
+- Environment variables override values from INI and can be used without any config file.
+"""
 import os
 import sys
 from configparser import ConfigParser
@@ -8,7 +13,10 @@ CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "config.in
 
 
 def load_config(path: str | None = None) -> dict:
-    """Load config from INI file (if exists) and env vars. Env vars override. Without config.ini works from env (e.g. Railway)."""
+    """Load config from INI file (if exists) and env vars.
+
+    Env vars override INI. If config.ini is missing, works from env only.
+    """
     path = path or CONFIG_PATH
     parser = ConfigParser()
     has_ini = os.path.isfile(path)
@@ -23,7 +31,12 @@ def load_config(path: str | None = None) -> dict:
 
     # Переменные окружения имеют приоритет; без config.ini всё берётся из env
     bot_token = (os.environ.get("BOT_TOKEN") or (get("TELEGRAM", "BOT_TOKEN") if has_ini else None) or "").strip()
-    username = (os.environ.get("AO3_USERNAME") or (get("AO3", "USERNAME") or get("AO3", "AO3_USERNAME") if has_ini else None) or "").strip()
+    username = (
+        os.environ.get("AO3_USERNAME")
+        or (get("AO3", "USERNAME") if has_ini else None)
+        or (get("AO3", "AO3_USERNAME") if has_ini else None)
+        or ""
+    ).strip()
     password = (os.environ.get("AO3_PASSWORD") or (get("AO3", "PASSWORD") if has_ini else None) or "").strip() or None
     check_interval_raw = (os.environ.get("CHECK_INTERVAL") or (get("APP", "CHECK_INTERVAL", "180") if has_ini else "180") or "180").strip()
     request_delay_raw = (os.environ.get("REQUEST_DELAY") or (get("AO3", "REQUEST_DELAY", "4") if has_ini else "15") or "15").strip()
@@ -48,6 +61,7 @@ def load_config(path: str | None = None) -> dict:
         print("  Missing or empty:", ", ".join(missing))
         print("  Config source:", "config.ini" if has_ini else "environment only (no config.ini)")
         if not has_ini:
+            print(f"  Config file not found: {path}")
             print("  Railway: add variables in Service → Variables (or ensure Shared Variables are linked to this service), then redeploy.")
         sys.exit(1)
 
@@ -55,6 +69,7 @@ def load_config(path: str | None = None) -> dict:
         print("AO3 PASSWORD is required (бот работает только через Inbox).")
         print("  Missing or empty: AO3_PASSWORD. Config source:", "config.ini" if has_ini else "environment only")
         if not has_ini:
+            print(f"  Config file not found: {path}")
             print("  Railway: add AO3_PASSWORD in Service → Variables, then redeploy.")
         sys.exit(1)
 

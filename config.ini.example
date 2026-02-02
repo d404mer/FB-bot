@@ -1,0 +1,20 @@
+[TELEGRAM]
+# Токен бота от @BotFather
+BOT_TOKEN = YOUR_TELEGRAM_BOT_TOKEN
+
+[AO3]
+# Имя пользователя AO3, за которым следить
+USERNAME = YOUR_AO3_USERNAME
+# Пароль нужен только для режима Inbox (если используется)
+PASSWORD = YOUR_AO3_PASSWORD
+# Задержка между запросами к AO3 (сек.)
+REQUEST_DELAY = 15
+
+[APP]
+# Интервал проверки (сек.)
+CHECK_INTERVAL = 180
+# Файл состояния
+STATE_FILE = bot_state.json
+# Файл логов (опционально)
+LOG_FILE = bot.log
+

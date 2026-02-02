@@ -317,6 +317,23 @@ def get_notifications_from_inbox(session, username: str, request_delay: float = 
     notifications = _parse_inbox_notifications(soup)
     logger.info("[AO3 Inbox] Загружено уведомлений: %s", len(notifications))
     if not notifications:
+        # Диагностика: при 0 уведомлений часто приходит не Inbox, а Cloudflare/логин/ошибка/другая вёрстка
+        body_lower = (html or "")[:4000].lower()
+        title = ""
+        try:
+            title_el = soup.select_one("title")
+            title = (title_el.get_text(strip=True) if title_el else "")[:120]
+        except Exception:
+            title = ""
+        if "just a moment" in body_lower or "cloudflare" in body_lower or "challenge" in body_lower:
+            logger.warning("[AO3 Inbox] Похоже на Cloudflare challenge (title=%r). Увеличьте REQUEST_DELAY (например, 20-30с) и/или CHECK_INTERVAL.", title)
+        elif "user_session" in body_lower or "log in" in body_lower or "login" in body_lower and "password" in body_lower:
+            logger.warning("[AO3 Inbox] Похоже на страницу логина вместо Inbox (title=%r). Проверьте AO3_USERNAME/AO3_PASSWORD и что это именно username, не email.", title)
+        elif title:
+            logger.warning("[AO3 Inbox] 0 уведомлений, но страница загружена (title=%r). Возможно, изменилась вёрстка Inbox.", title)
+        else:
+            logger.warning("[AO3 Inbox] 0 уведомлений, title не найден. Возможно, AO3 вернул сокращённую/ошибочную страницу.")
+
         # Отладка: сохранить HTML при пустом результате (разметка могла измениться)
         try:
             debug_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ao3_inbox_last.html")

@@ -50,7 +50,7 @@ DEFAULT_HEADERS = {
 }
 RETRY_DELAY = 25   # секунд между повторами при 5xx
 MAX_RETRIES = 3    # при 525 — не висеть дольше ~2 мин
-REQUEST_TIMEOUT = 30  # секунд на один запрос, чтобы не зависать
+REQUEST_TIMEOUT = 60  # секунд на один запрос (AO3/Cloudflare иногда отвечают медленно)
 
 # Selectors: AO3 uses ol.work > li.blurb, внутри — ссылка на /works/ID или works/ID
 WORK_LINK_RE = re.compile(r"/?works/(\d+)")
@@ -195,17 +195,38 @@ def create_ao3_session(username: str, password: str):
 
 
 def _get_inbox_html(session, username: str) -> str | None:
-    """Загрузить HTML страницы Inbox пользователя через авторизованную сессию ao3_api."""
+    """Загрузить HTML страницы Inbox пользователя через авторизованную сессию ao3_api. С повторами при таймауте/5xx."""
     url = _get_inbox_url(username)
-    try:
-        req = session.get(url, timeout=REQUEST_TIMEOUT)
-        if req.status_code != 200:
-            logger.warning("[AO3 Inbox] HTTP %s: %s", req.status_code, url)
-            return None
-        return req.text
-    except Exception as e:
-        logger.warning("[AO3 Inbox] Ошибка загрузки: %s", e)
-        return None
+    last_error = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            if attempt > 0:
+                logger.info("[AO3 Inbox] Повтор запроса (попытка %s/%s)", attempt + 1, MAX_RETRIES)
+                time.sleep(RETRY_DELAY)
+            req = session.get(url, timeout=REQUEST_TIMEOUT)
+            if 500 <= req.status_code < 600:
+                last_error = f"HTTP {req.status_code}"
+                if attempt < MAX_RETRIES - 1:
+                    logger.warning("[AO3 Inbox] %s, повтор через %s с", last_error, RETRY_DELAY)
+                continue
+            if req.status_code != 200:
+                logger.warning("[AO3 Inbox] HTTP %s: %s", req.status_code, url)
+                return None
+            return req.text
+        except requests.exceptions.Timeout as e:
+            last_error = e
+            if attempt < MAX_RETRIES - 1:
+                logger.warning("[AO3 Inbox] Таймаут, повтор через %s с (попытка %s/%s)", RETRY_DELAY, attempt + 1, MAX_RETRIES)
+        except Exception as e:
+            last_error = e
+            if attempt < MAX_RETRIES - 1:
+                logger.warning("[AO3 Inbox] Ошибка загрузки: %s, повтор через %s с", e, RETRY_DELAY)
+            else:
+                logger.warning("[AO3 Inbox] Ошибка загрузки: %s", e)
+                return None
+    if last_error is not None:
+        logger.warning("[AO3 Inbox] Не удалось после %s попыток: %s", MAX_RETRIES, last_error)
+    return None
 
 
 # id элемента комментария в Inbox: feedback_comment_1106757276

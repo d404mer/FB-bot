@@ -39,12 +39,23 @@ def load_config(path: str | None = None) -> dict:
         sys.exit(1)
 
     if not bot_token or not username:
+        missing = []
+        if not bot_token:
+            missing.append("BOT_TOKEN")
+        if not username:
+            missing.append("AO3_USERNAME")
         print("BOT_TOKEN and AO3 USERNAME are required. Set in config.ini or environment.")
-        print("  config.ini: [TELEGRAM] BOT_TOKEN = ... and [AO3] USERNAME = ...")
+        print("  Missing or empty:", ", ".join(missing))
+        print("  Config source:", "config.ini" if has_ini else "environment only (no config.ini)")
+        if not has_ini:
+            print("  Railway: add variables in Service → Variables (or ensure Shared Variables are linked to this service), then redeploy.")
         sys.exit(1)
 
     if not password:
-        print("AO3 PASSWORD is required (бот работает только через Inbox). Set in config.ini [AO3] PASSWORD = ... or AO3_PASSWORD env.")
+        print("AO3 PASSWORD is required (бот работает только через Inbox).")
+        print("  Missing or empty: AO3_PASSWORD. Config source:", "config.ini" if has_ini else "environment only")
+        if not has_ini:
+            print("  Railway: add AO3_PASSWORD in Service → Variables, then redeploy.")
         sys.exit(1)
 
     return {

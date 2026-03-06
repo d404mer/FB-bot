@@ -64,7 +64,7 @@
     "chat_id": -1003891654817,
     "message_thread_id": 4
   },
-  "initial_seed_done": true,
+  "initial_seed_done": false,
   "notification_targets": [
     {
       "chat_id": -1003891654817,

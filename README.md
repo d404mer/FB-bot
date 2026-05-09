@@ -20,7 +20,7 @@ WTF-bot/
 ├── Procfile
 ├── config.ini.example
 ├── .env.example         # Пример переменных окружения (скопировать в .env при желании)
-├── bot_state.json       # Создаётся автоматически
+├── bot_state.json       # Создаётся автоматически (в .gitignore; шаблон без данных — bot_state.json.example)
 ├── .gitignore
 └── README.md
 ```

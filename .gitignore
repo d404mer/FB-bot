@@ -1,9 +1,22 @@
+# Секреты и локальная конфигурация
 config.ini
+.env
+.env.*
+!.env.example
+
+# Состояние бота (chat_id, подписки, история комментариев)
+bot_state.json
+bot_state.json.*
+
+# Логи и временные дампы
 bot.log
+*.log
+*.tmp
+ao3_last_page.html
+ao3_inbox_last.html
+
+# Окружение Python
 venv/
 __pycache__/
 *.pyc
 .pytest_cache/
-*.tmp
-ao3_last_page.html
-ao3_inbox_last.html

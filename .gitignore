@@ -6,7 +6,6 @@ config.ini
 
 # Состояние бота (chat_id, подписки, история комментариев)
 bot_state.json
-bot_state.json.*
 
 # Логи и временные дампы
 bot.log

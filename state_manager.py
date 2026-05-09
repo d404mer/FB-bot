@@ -110,3 +110,15 @@ def remove_notification_target(state: dict[str, Any], chat_id: int, message_thre
     removed = len(new_list) < len(targets)
     state["notification_targets"] = new_list
     return removed
+
+
+def remove_all_targets_for_chat(state: dict[str, Any], chat_id: int) -> int:
+    """Удалить все подписки для данного chat_id (все топики супергруппы). Возвращает число удалённых записей."""
+    targets = state.get("notification_targets") or []
+    if not isinstance(targets, list):
+        return 0
+    cid = int(chat_id)
+    new_list = [t for t in targets if not (isinstance(t, dict) and int(t.get("chat_id") or 0) == cid)]
+    removed = len(targets) - len(new_list)
+    state["notification_targets"] = new_list
+    return removed

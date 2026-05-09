@@ -10,6 +10,14 @@ PASSWORD = YOUR_AO3_PASSWORD
 # Задержка между запросами к AO3 (сек.)
 REQUEST_DELAY = 15
 
+[ADMIN]
+# Глобальный админ: ЛС-отчёты VPS и команды /status, /topics (username без @)
+TELEGRAM_USERNAME = 
+# Числовой user id (надёжнее username); можно задать вместо TELEGRAM_USERNAME
+TELEGRAM_USER_ID = 
+# Интервал авто-отчёта VPS в ЛС (сек). 0 — только по /status
+STATUS_INTERVAL = 3600
+
 [APP]
 # Интервал проверки (сек.)
 CHECK_INTERVAL = 180

@@ -44,11 +44,34 @@ def load_config(path: str | None = None) -> dict:
     log_file_raw = os.environ.get("LOG_FILE") or (get("APP", "LOG_FILE", "bot.log") if has_ini else None)
     log_file = log_file_raw.strip() if log_file_raw else None
 
+    admin_username_raw = (
+        os.environ.get("ADMIN_TELEGRAM_USERNAME")
+        or (get("ADMIN", "TELEGRAM_USERNAME") if has_ini else None)
+        or ""
+    ).strip()
+    admin_username = admin_username_raw.lstrip("@").strip() or None
+
+    admin_user_id_raw = (os.environ.get("ADMIN_TELEGRAM_USER_ID") or (get("ADMIN", "TELEGRAM_USER_ID") if has_ini else None) or "").strip()
+    admin_user_id: int | None = None
+    if admin_user_id_raw:
+        try:
+            admin_user_id = int(admin_user_id_raw)
+        except ValueError:
+            print("ADMIN_TELEGRAM_USER_ID must be an integer.")
+            sys.exit(1)
+
+    admin_status_raw = (
+        os.environ.get("ADMIN_STATUS_INTERVAL")
+        or (get("ADMIN", "STATUS_INTERVAL", "3600") if has_ini else "3600")
+        or "3600"
+    ).strip()
+
     try:
         check_interval = int(check_interval_raw) if check_interval_raw else 180
         request_delay = int(request_delay_raw) if request_delay_raw else 4
+        admin_status_interval = int(admin_status_raw) if admin_status_raw else 3600
     except ValueError:
-        print("CHECK_INTERVAL and REQUEST_DELAY must be integers.")
+        print("CHECK_INTERVAL, REQUEST_DELAY and ADMIN_STATUS_INTERVAL must be integers.")
         sys.exit(1)
 
     if not bot_token or not username:
@@ -81,5 +104,8 @@ def load_config(path: str | None = None) -> dict:
         "REQUEST_DELAY": request_delay,
         "STATE_FILE": state_file or "bot_state.json",
         "LOG_FILE": log_file or None,
+        "ADMIN_TELEGRAM_USERNAME": admin_username,
+        "ADMIN_TELEGRAM_USER_ID": admin_user_id,
+        "ADMIN_STATUS_INTERVAL": max(0, admin_status_interval),
         "_config_path": path if has_ini else "env",
     }

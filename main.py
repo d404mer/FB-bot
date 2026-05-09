@@ -31,7 +31,15 @@ def main() -> None:
     state["tracked_user"] = cfg["AO3_USERNAME"]
     state_manager.save_state(state, state_file)
 
-    bot = bot_client.init_bot(cfg["BOT_TOKEN"], state_file, state_manager)
+    bot_ctx = bot_client.BotRuntimeContext(
+        state_file=state_file,
+        state_manager=state_manager,
+        ao3_username=cfg["AO3_USERNAME"],
+        admin_username=cfg.get("ADMIN_TELEGRAM_USERNAME"),
+        admin_user_id=cfg.get("ADMIN_TELEGRAM_USER_ID"),
+        admin_status_interval_sec=int(cfg.get("ADMIN_STATUS_INTERVAL", 3600)),
+    )
+    bot = bot_client.init_bot(cfg["BOT_TOKEN"], bot_ctx)
     poll_thread = threading.Thread(target=bot_client.start_polling, args=(bot,), daemon=True)
     poll_thread.start()
 

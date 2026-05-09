@@ -56,6 +56,12 @@ def load_config(path: str | None = None) -> dict:
         or ""
     ).strip()
     telegram_proxy_url = telegram_proxy_raw or None
+    ao3_proxy_explicit = (
+        _env("AO3_PROXY_URL") or (get("AO3", "PROXY_URL") if has_ini else None) or ""
+    ).strip()
+    # Если прокси для AO3 не задан — используем тот же, что для Telegram (типичный VPS + локальный SOCKS).
+    ao3_proxy_raw = (ao3_proxy_explicit or telegram_proxy_raw or "").strip()
+    ao3_proxy_url = ao3_proxy_raw or None
     username = (
         _env("AO3_USERNAME")
         or (get("AO3", "USERNAME") if has_ini else None)
@@ -137,6 +143,7 @@ def load_config(path: str | None = None) -> dict:
         "ADMIN_TELEGRAM_USER_ID": admin_user_id,
         "ADMIN_STATUS_INTERVAL": max(0, admin_status_interval),
         "TELEGRAM_PROXY_URL": telegram_proxy_url,
+        "AO3_PROXY_URL": ao3_proxy_url,
         "_config_path": path if has_ini else "env",
         "_check_interval_source": "переменная окружения или .env" if check_interval_override else ("config.ini" if has_ini else "по умолчанию"),
     }

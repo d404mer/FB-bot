@@ -4,8 +4,9 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -13,6 +14,48 @@ from bs4 import BeautifulSoup
 from utils import comment_hash, safe_delay
 
 logger = logging.getLogger(__name__)
+
+# Прокси для всех HTTP(S) к archiveofourown.org (requests и ao3_api.Session). Задаётся через set_ao3_http_proxy из main.
+_AO3_HTTP_PROXY: str | None = None
+
+
+def _proxy_log_label(url: str) -> str:
+    try:
+        u = urlparse(url)
+        host = u.hostname or "?"
+        if u.port:
+            return f"{u.scheme}://{host}:{u.port}"
+        return f"{u.scheme}://{host}"
+    except Exception:
+        return "прокси"
+
+
+def set_ao3_http_proxy(proxy_url: str | None) -> None:
+    """Вызвать до create_ao3_session: все запросы к AO3 пойдут через этот URL (SOCKS5/HTTP как у requests)."""
+    global _AO3_HTTP_PROXY
+    _AO3_HTTP_PROXY = proxy_url.strip() if proxy_url and proxy_url.strip() else None
+    if _AO3_HTTP_PROXY:
+        logger.info("[AO3] HTTP(S) к archiveofourown.org через прокси: %s", _proxy_log_label(_AO3_HTTP_PROXY))
+
+
+@contextmanager
+def _requests_sessions_use_proxy(proxy_url: str | None):
+    """Временно патчит requests.Session.__init__, чтобы ao3_api создал сессию с proxies (библиотека не принимает proxy в конструкторе)."""
+    if not proxy_url:
+        yield
+        return
+    orig_init = requests.Session.__init__
+
+    def patched_init(self, *args, **kwargs):
+        orig_init(self, *args, **kwargs)
+        self.proxies = {"http": proxy_url, "https": proxy_url}
+
+    requests.Session.__init__ = patched_init  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        requests.Session.__init__ = orig_init  # type: ignore[method-assign]
+
 
 # Параллельная загрузка страниц с комментариями (батчами), чтобы не превышать лимит AO3
 PARALLEL_WORKERS = 2
@@ -129,6 +172,8 @@ def _normalize_date_display(raw: str) -> str:
 
 def _session() -> requests.Session:
     s = requests.Session()
+    if _AO3_HTTP_PROXY:
+        s.proxies = {"http": _AO3_HTTP_PROXY, "https": _AO3_HTTP_PROXY}
     s.headers.update(DEFAULT_HEADERS)
     return s
 
@@ -189,7 +234,8 @@ def create_ao3_session(username: str, password: str):
         # Лог до вызова: AO3.Session делает синхронный POST на archiveofourown.org без нашего таймаута —
         # при «висящей» сети следующая строка может не появиться долго или никогда.
         logger.info("[AO3] Логин на archiveofourown.org (ao3_api.Session), пользователь %s…", username)
-        sess = AO3.Session(username, password)
+        with _requests_sessions_use_proxy(_AO3_HTTP_PROXY):
+            sess = AO3.Session(username, password)
         logger.info("[AO3] Сессия создана для пользователя %s", username)
         return sess
     except Exception as e:

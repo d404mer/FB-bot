@@ -20,10 +20,13 @@ NOTIFICATION_DELAY_SECONDS = 0.8
 def main() -> None:
     cfg = config.load_config()
     utils.setup_logging(cfg.get("LOG_FILE"))
-    # Показываем путь к конфигу и откуда берётся интервал (CHECK_INTERVAL в окружении перекрывает config.ini)
-    import os as _os
-    interval_src = "переменная окружения" if _os.environ.get("CHECK_INTERVAL") else "config.ini"
-    logger.info("Конфиг: %s | CHECK_INTERVAL=%s с, REQUEST_DELAY=%s с (интервал из %s)", cfg.get("_config_path", "?"), cfg["CHECK_INTERVAL"], cfg["REQUEST_DELAY"], interval_src)
+    logger.info(
+        "Конфиг: %s | CHECK_INTERVAL=%s с, REQUEST_DELAY=%s с (интервал из %s)",
+        cfg.get("_config_path", "?"),
+        cfg["CHECK_INTERVAL"],
+        cfg["REQUEST_DELAY"],
+        cfg.get("_check_interval_source", "?"),
+    )
 
     state_file = cfg["STATE_FILE"]
     # Ensure state exists with defaults

@@ -103,7 +103,12 @@ def _resolve_admin_chat(bot: telebot.TeleBot, ctx: BotRuntimeContext) -> None:
             ctx.admin_chat_id = ch.id
             logger.info("[Admin] ЛС-отчёты: разрешён @%s → chat_id=%s", ctx.admin_username, ctx.admin_chat_id)
         except Exception as e:
-            logger.warning("[Admin] Не удалось get_chat @%s: %s", ctx.admin_username, e)
+            logger.warning(
+                "[Admin] Не удалось get_chat @%s: %s — укажите числовой TELEGRAM_USER_ID в [ADMIN] config.ini "
+                "(или ADMIN_TELEGRAM_USER_ID в .env), если resolve по username недоступен.",
+                ctx.admin_username,
+                e,
+            )
     else:
         logger.info("[Admin] ADMIN_TELEGRAM_USERNAME / ADMIN_TELEGRAM_USER_ID не заданы — ЛС-отчёты отключены")
 
@@ -376,6 +381,9 @@ def start_polling(bot: telebot.TeleBot) -> None:
         t = threading.Thread(target=_admin_status_loop, args=(bot, ctx), daemon=True)
         t.start()
     elif ctx.admin_status_interval_sec > 0:
-        logger.warning("[Admin] ADMIN_STATUS_INTERVAL>0, но chat_id админа не определён — таймер отчётов отключён")
+        logger.warning(
+            "[Admin] ADMIN_STATUS_INTERVAL>0, но chat_id админа не определён — таймер отчётов отключён. "
+            "Задайте TELEGRAM_USER_ID в [ADMIN] (config.ini) или ADMIN_TELEGRAM_USER_ID в .env; при необходимости TELEGRAM_USERNAME."
+        )
 
     bot.infinity_polling(allowed_updates=["message", "my_chat_member"])

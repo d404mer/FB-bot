@@ -9,7 +9,7 @@ Telegram-бот следит за **Inbox** аккаунта [Archive of Our Own
 ```
 WTF-bot/
 ├── main.py              # Точка входа: конфиг, поток polling Telegram, цикл проверки AO3
-├── config.py            # Загрузка настроек из config.ini и переменных окружения
+├── config.py            # Загрузка настроек: .env + config.ini в каталоге проекта (и переменные процесса)
 ├── bot_client.py        # Telegram: команды, админ в ЛС, my_chat_member, уведомления
 ├── host_status.py       # Метрики VPS для отчёта глобальному админу (HTML)
 ├── ao3_parser.py        # AO3: сессия (ao3_api), загрузка Inbox, BeautifulSoup-парсинг
@@ -69,7 +69,7 @@ flowchart LR
 
 | Модуль | Роль |
 |--------|------|
-| **`config.py`** | Слияние `config.ini` и env; приоритет у переменных окружения. Обязательны `BOT_TOKEN`, `AO3_USERNAME`, `AO3_PASSWORD`. |
+| **`config.py`** | Один каталог проекта: автоматически читается `.env` (если есть), затем `config.ini`; непустые переменные процесса перекрывают оба. Обязательны `BOT_TOKEN`, `AO3_USERNAME`, `AO3_PASSWORD`. |
 | **`state_manager.py`** | `known_comments` по `work_id`, список **`notification_targets`**, флаг `initial_seed_done`, миграция со старого одиночного `notification_target`. |
 | **`ao3_parser.py`** | Логин через **ao3_api** (`AO3.Session`), GET Inbox через эту сессию, разбор `ol.comment.index.group`, нормализация дат в МСК, retry при 5xx/таймаутах. Содержит также код для списка работ и комментариев со страниц работ — для основного режима **не используется** (остался как расширяемая/legacy-часть). |
 | **`bot_client.py`** | `TeleBot`, контекст `BotRuntimeContext`, подписки на топики, **`my_chat_member`** (снятие подписок при кике), глобальный админ в ЛС (`/status`, `/topics`), периодический отчёт по VPS. |
@@ -103,6 +103,7 @@ flowchart LR
 
 | Пакет | Назначение |
 |-------|------------|
+| `python-dotenv` | Автозагрузка `.env` из каталога проекта при старте |
 | `requests` | HTTP (в т.ч. внутри ao3_api и вспомогательные запросы модуля парсера) |
 | `beautifulsoup4` | Разбор HTML Inbox |
 | `pyTelegramBotAPI` | Telegram Bot API |
@@ -115,11 +116,17 @@ flowchart LR
 
 ## Конфигурация
 
-### Файл `config.ini` (шаблон: `config.ini.example`)
+Все параметры задаются **в каталоге проекта** (рядом с `main.py`): основной файл **`config.ini`** (шаблон [`config.ini.example`](config.ini.example)) и/или **`.env`** (шаблон [`.env.example`](.env.example)). Файл `.env` подхватывается **автоматически** при старте (`python-dotenv`), без ручного `export`.
 
-Секции **`[TELEGRAM]`**, **`[AO3]`**, **`[ADMIN]`** (опционально), **`[APP]`**. Файл обычно в `.gitignore`; секреты лучше задавать через **переменные окружения** в проде. Шаблон переменных см. **[`.env.example`](.env.example)**.
+**Порядок приоритета:** непустая переменная окружения процесса (systemd, Railway, `export`) → ключ из `.env` → ключ из `config.ini`. Пустая строка в окружении не считается заданным значением (удобно для шаблонов unit-файлов).
 
-### Переменные окружения (перекрывают INI)
+На проде можно держать только `config.ini`, только `.env`, или разделить (например секреты в `.env`, остальное в INI).
+
+### Файл `config.ini`
+
+Секции **`[TELEGRAM]`**, **`[AO3]`**, **`[ADMIN]`** (опционально), **`[APP]`**. В **`[TELEGRAM]`** для доступа к Bot API через локальный sing-box: `PROXY_URL = socks5://127.0.0.1:1234`. В **`[ADMIN]`** для таймерных ЛС-отчётов задайте **`TELEGRAM_USER_ID`** (число) — надёжнее, чем только username, если `getChat` по `@username` недоступен.
+
+### Переменные (те же имени в `.env`, в панели хостинга или в shell)
 
 | Переменная | Описание |
 |------------|----------|

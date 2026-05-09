@@ -1,7 +1,8 @@
 [TELEGRAM]
 # Токен бота от @BotFather
 BOT_TOKEN = YOUR_TELEGRAM_BOT_TOKEN
-# Опционально: только запросы к api.telegram.org через прокси (SOCKS5: socks5h://user:pass@host:1080)
+# Опционально: только запросы к api.telegram.org через прокси (локально: socks5://127.0.0.1:PORT)
+# То же можно задать в .env как TELEGRAM_PROXY_URL (файл .env в этом же каталоге подхватывается автоматически).
 PROXY_URL =
 
 [AO3]
@@ -15,7 +16,7 @@ REQUEST_DELAY = 15
 [ADMIN]
 # Глобальный админ: ЛС-отчёты VPS и команды /status, /topics (username без @)
 TELEGRAM_USERNAME = 
-# Числовой user id (надёжнее username); можно задать вместо TELEGRAM_USERNAME
+# Числовой user id (предпочтительно для таймерных отчётов, если Bot API не может resolve username)
 TELEGRAM_USER_ID = 
 # Интервал авто-отчёта VPS в ЛС (сек). 0 — только по /status
 STATUS_INTERVAL = 3600

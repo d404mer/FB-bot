@@ -1,6 +1,8 @@
 [TELEGRAM]
 # Токен бота от @BotFather
 BOT_TOKEN = YOUR_TELEGRAM_BOT_TOKEN
+# Опционально: только запросы к api.telegram.org через прокси (SOCKS5: socks5h://user:pass@host:1080)
+PROXY_URL =
 
 [AO3]
 # Имя пользователя AO3, за которым следить

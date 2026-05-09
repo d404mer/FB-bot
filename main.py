@@ -38,6 +38,7 @@ def main() -> None:
         admin_username=cfg.get("ADMIN_TELEGRAM_USERNAME"),
         admin_user_id=cfg.get("ADMIN_TELEGRAM_USER_ID"),
         admin_status_interval_sec=int(cfg.get("ADMIN_STATUS_INTERVAL", 3600)),
+        telegram_proxy_url=cfg.get("TELEGRAM_PROXY_URL"),
     )
     bot = bot_client.init_bot(cfg["BOT_TOKEN"], bot_ctx)
     poll_thread = threading.Thread(target=bot_client.start_polling, args=(bot,), daemon=True)

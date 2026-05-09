@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import telebot
+from telebot import apihelper as tele_apihelper
 from telebot.apihelper import ApiTelegramException
 
 import host_status
@@ -27,12 +28,38 @@ class BotRuntimeContext:
     admin_user_id: int | None
     admin_status_interval_sec: int
     admin_chat_id: int | None = None
+    telegram_proxy_url: str | None = None
+
+
+def _proxy_log_label(url: str) -> str:
+    """Схема и хост для лога без логина/пароля."""
+    try:
+        from urllib.parse import urlparse
+
+        u = urlparse(url)
+        host = u.hostname or "?"
+        port = u.port
+        if port:
+            return f"{u.scheme}://{host}:{port}"
+        return f"{u.scheme}://{host}"
+    except Exception:
+        return "прокси"
+
+
+def _apply_telegram_proxy(proxy_url: str | None) -> None:
+    """Только запросы pyTelegramBotAPI к api.telegram.org; AO3 не затрагивается."""
+    if proxy_url:
+        tele_apihelper.proxy = {"http": proxy_url, "https": proxy_url}
+        logger.info("[Telegram] Bot API через прокси: %s", _proxy_log_label(proxy_url))
+    else:
+        tele_apihelper.proxy = None
 
 
 def init_bot(
     token: str,
     ctx: BotRuntimeContext,
 ) -> telebot.TeleBot:
+    _apply_telegram_proxy(ctx.telegram_proxy_url)
     bot = telebot.TeleBot(token)
     bot.wtf_ctx = ctx  # type: ignore[attr-defined]
     return bot

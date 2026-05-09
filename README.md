@@ -133,6 +133,11 @@ flowchart LR
 | `ADMIN_TELEGRAM_USERNAME` | Username глобального админа **без @** (ЛС: `/status`, `/topics`; им должна быть разрешена переписка с ботом) |
 | `ADMIN_TELEGRAM_USER_ID` | Числовой Telegram user id админа (если задан, надёжнее username) |
 | `ADMIN_STATUS_INTERVAL` | Интервал авто-отчёта о VPS в ЛС админу (секунды). **`0`** — не слать по таймеру (остаётся ручной `/status`) |
+| `TELEGRAM_PROXY_URL` | Прокси **только для Telegram Bot API** (`socks5h://…`, `socks5://…`, `http://…`). AO3 запросы прокси не используют. Нужен `PySocks` для SOCKS (в `requirements.txt`) |
+
+### Если с VPS не открывается api.telegram.org
+
+Задайте **`TELEGRAM_PROXY_URL`**: адрес SOCKS5 или HTTP из ЛК VPN-провайдера (если они выдают прокси), или свой прокси на сервере за рубежом. На потребительском VPN без выданного прокси обычно ставят клиент на ПК, а на VPS — отдельный выход (прокси-хостинг или маленький зарубежный VPS с `dante`/`3proxy`).
 
 ---
 

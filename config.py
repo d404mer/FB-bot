@@ -31,6 +31,12 @@ def load_config(path: str | None = None) -> dict:
 
     # Переменные окружения имеют приоритет; без config.ini всё берётся из env
     bot_token = (os.environ.get("BOT_TOKEN") or (get("TELEGRAM", "BOT_TOKEN") if has_ini else None) or "").strip()
+    telegram_proxy_raw = (
+        os.environ.get("TELEGRAM_PROXY_URL")
+        or (get("TELEGRAM", "PROXY_URL") if has_ini else None)
+        or ""
+    ).strip()
+    telegram_proxy_url = telegram_proxy_raw or None
     username = (
         os.environ.get("AO3_USERNAME")
         or (get("AO3", "USERNAME") if has_ini else None)
@@ -107,5 +113,6 @@ def load_config(path: str | None = None) -> dict:
         "ADMIN_TELEGRAM_USERNAME": admin_username,
         "ADMIN_TELEGRAM_USER_ID": admin_user_id,
         "ADMIN_STATUS_INTERVAL": max(0, admin_status_interval),
+        "TELEGRAM_PROXY_URL": telegram_proxy_url,
         "_config_path": path if has_ini else "env",
     }

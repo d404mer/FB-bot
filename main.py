@@ -49,6 +49,7 @@ def main() -> None:
 
     logger.info("[Цикл] Режим: только Inbox, только комментарии")
 
+    logger.info("[AO3] Инициализация сессии (до успеха не будет строк «Вход выполнен» и цикла Inbox)")
     ao3_session = ao3_parser.create_ao3_session(cfg["AO3_USERNAME"], cfg["AO3_PASSWORD"])
     if ao3_session is None:
         logger.error("Не удалось войти в AO3. Проверьте USERNAME и PASSWORD в config.ini.")

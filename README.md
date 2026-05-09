@@ -21,6 +21,9 @@ WTF-bot/
 ├── config.ini.example
 ├── .env.example         # Пример переменных окружения (скопировать в .env при желании)
 ├── bot_state.json       # Создаётся автоматически (в .gitignore; шаблон без данных — bot_state.json.example)
+├── docs/
+│   ├── PLANNED_ARCHITECTURE.md
+│   └── from-zero-ru.md  # С нуля: VPS, прокси, конфиг, порядок чтения кода
 ├── .gitignore
 └── README.md
 ```
@@ -115,6 +118,8 @@ flowchart LR
 ---
 
 ## Конфигурация
+
+Пошаговое объяснение типичных проблем (VPS, прокси, bash, Git), порядок чтения кода и **темы для самостоятельного изучения** (сеть, TLS, прокси, systemd) — в **[`docs/from-zero-ru.md`](docs/from-zero-ru.md)**.
 
 Все параметры задаются **в каталоге проекта** (рядом с `main.py`): основной файл **`config.ini`** (шаблон [`config.ini.example`](config.ini.example)) и/или **`.env`** (шаблон [`.env.example`](.env.example)). Файл `.env` подхватывается **автоматически** при старте (`python-dotenv`), без ручного `export`.
 

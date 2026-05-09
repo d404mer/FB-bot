@@ -186,6 +186,9 @@ def create_ao3_session(username: str, password: str):
     if not _HAS_AO3_API or not username or not password:
         return None
     try:
+        # Лог до вызова: AO3.Session делает синхронный POST на archiveofourown.org без нашего таймаута —
+        # при «висящей» сети следующая строка может не появиться долго или никогда.
+        logger.info("[AO3] Логин на archiveofourown.org (ao3_api.Session), пользователь %s…", username)
         sess = AO3.Session(username, password)
         logger.info("[AO3] Сессия создана для пользователя %s", username)
         return sess

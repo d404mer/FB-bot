@@ -165,6 +165,70 @@ def _unsubscribe_all_in_chat(bot: telebot.TeleBot, message: telebot.types.Messag
 
 
 COLLAPSIBLE_QUOTE_MIN_LENGTH = 280
+TELEGRAM_MESSAGE_LIMIT = 4096
+TRUNCATION_SUFFIX = "\n\n… (комментарий обрезан, смотрите полный текст на AO3)"
+
+
+def _assemble_comment_notification(
+    title: str,
+    url: str,
+    author: str,
+    date: str,
+    raw_text: str,
+    *,
+    truncated: bool,
+    use_expandable_quote: bool,
+) -> str:
+    quote_tag = "<blockquote expandable>" if use_expandable_quote else "<blockquote>"
+    body = escape_html(raw_text)
+    if truncated:
+        body += TRUNCATION_SUFFIX
+    return (
+        "<b>💬 Новый комментарий на AO3</b>\n\n"
+        "<b>Работа:</b> <a href=\"" + url + "\">" + title + "</a>\n"
+        "<b>Автор:</b> " + author + "\n"
+        "<b>Когда:</b> " + date + "\n\n"
+        "<b>Текст:</b>\n"
+        + quote_tag + body + "</blockquote>"
+    )
+
+
+def _truncate_comment_text_for_telegram(
+    title: str,
+    url: str,
+    author: str,
+    date: str,
+    raw_text: str,
+) -> tuple[str, bool]:
+    use_expandable_quote = len(raw_text.strip()) >= COLLAPSIBLE_QUOTE_MIN_LENGTH
+    full = _assemble_comment_notification(
+        title, url, author, date, raw_text, truncated=False, use_expandable_quote=use_expandable_quote
+    )
+    if len(full) <= TELEGRAM_MESSAGE_LIMIT:
+        return raw_text, False
+
+    lo, hi = 0, len(raw_text)
+    best = 0
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = raw_text[:mid].rstrip()
+        msg = _assemble_comment_notification(
+            title, url, author, date, candidate, truncated=True, use_expandable_quote=use_expandable_quote
+        )
+        if len(msg) <= TELEGRAM_MESSAGE_LIMIT:
+            best = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+
+    truncated_text = raw_text[:best].rstrip()
+    logger.info(
+        "[Telegram] Текст комментария обрезан: %s → %s символов (лимит Telegram %s)",
+        len(raw_text),
+        len(truncated_text),
+        TELEGRAM_MESSAGE_LIMIT,
+    )
+    return truncated_text, True
 
 
 def _format_notification(comment_data: dict[str, Any]) -> str:
@@ -173,7 +237,6 @@ def _format_notification(comment_data: dict[str, Any]) -> str:
     author = escape_html(comment_data.get("author") or "Anonymous")
     date = escape_html(comment_data.get("date") or "—")
     raw_text = comment_data.get("text") or ""
-    text_escaped = escape_html(raw_text)
     notif_type = (comment_data.get("notification_type") or "comment").lower()
     if notif_type == "kudos":
         return (
@@ -182,17 +245,10 @@ def _format_notification(comment_data: dict[str, Any]) -> str:
             "<b>Кто:</b> " + author + "\n"
             "<b>Когда:</b> " + date
         )
-    if len(raw_text.strip()) >= COLLAPSIBLE_QUOTE_MIN_LENGTH:
-        quote_tag = "<blockquote expandable>"
-    else:
-        quote_tag = "<blockquote>"
-    return (
-        "<b>💬 Новый комментарий на AO3</b>\n\n"
-        "<b>Работа:</b> <a href=\"" + url + "\">" + title + "</a>\n"
-        "<b>Автор:</b> " + author + "\n"
-        "<b>Когда:</b> " + date + "\n\n"
-        "<b>Текст:</b>\n"
-        + quote_tag + text_escaped + "</blockquote>"
+    fitted_text, truncated = _truncate_comment_text_for_telegram(title, url, author, date, raw_text)
+    use_expandable_quote = len(raw_text.strip()) >= COLLAPSIBLE_QUOTE_MIN_LENGTH
+    return _assemble_comment_notification(
+        title, url, author, date, fitted_text, truncated=truncated, use_expandable_quote=use_expandable_quote
     )
 
 

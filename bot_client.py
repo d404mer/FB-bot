@@ -123,9 +123,11 @@ def _subscribe_current_topic(bot: telebot.TeleBot, message: telebot.types.Messag
     if user_id is None or not _is_chat_admin(bot, chat_id, user_id):
         bot.reply_to(message, "Только администраторы группы могут подписывать топик.")
         return
-    state = ctx.state_manager.load_state(ctx.state_file)
-    added = ctx.state_manager.add_notification_target(state, chat_id, thread_id)
-    ctx.state_manager.save_state(state, ctx.state_file)
+    added = ctx.state_manager.update_state(
+        ctx.state_file,
+        ctx.ao3_username,
+        lambda state: ctx.state_manager.add_notification_target(state, chat_id, thread_id),
+    )
     if added:
         bot.reply_to(message, "Топик подписан: сюда будут приходить уведомления о новых комментариях AO3.")
     else:
@@ -140,9 +142,11 @@ def _unsubscribe_current_topic(bot: telebot.TeleBot, message: telebot.types.Mess
         if user_id is None or not _is_chat_admin(bot, chat_id, user_id):
             bot.reply_to(message, "Только администраторы группы могут отписывать топик.")
             return
-    state = ctx.state_manager.load_state(ctx.state_file)
-    removed = ctx.state_manager.remove_notification_target(state, chat_id, thread_id)
-    ctx.state_manager.save_state(state, ctx.state_file)
+    removed = ctx.state_manager.update_state(
+        ctx.state_file,
+        ctx.ao3_username,
+        lambda state: ctx.state_manager.remove_notification_target(state, chat_id, thread_id),
+    )
     if removed:
         bot.reply_to(message, "Топик отписан от уведомлений.")
     else:
@@ -158,9 +162,11 @@ def _unsubscribe_all_in_chat(bot: telebot.TeleBot, message: telebot.types.Messag
     if user_id is None or not _is_chat_admin(bot, chat_id, user_id):
         bot.reply_to(message, "Только администраторы группы могут снять все подписки этого чата.")
         return
-    state = ctx.state_manager.load_state(ctx.state_file)
-    n = ctx.state_manager.remove_all_targets_for_chat(state, chat_id)
-    ctx.state_manager.save_state(state, ctx.state_file)
+    n = ctx.state_manager.update_state(
+        ctx.state_file,
+        ctx.ao3_username,
+        lambda state: ctx.state_manager.remove_all_targets_for_chat(state, chat_id),
+    )
     bot.reply_to(message, f"Удалены все подписки для этого чата ({n} записей)." if n else "В этом чате не было подписок.")
 
 
@@ -407,10 +413,12 @@ def register_handlers(bot: telebot.TeleBot) -> None:
             if new_cm.status not in ("left", "kicked"):
                 return
             chat_id = update.chat.id
-            state = ctx.state_manager.load_state(ctx.state_file)
-            n = ctx.state_manager.remove_all_targets_for_chat(state, chat_id)
+            n = ctx.state_manager.update_state(
+                ctx.state_file,
+                ctx.ao3_username,
+                lambda state: ctx.state_manager.remove_all_targets_for_chat(state, chat_id),
+            )
             if n:
-                ctx.state_manager.save_state(state, ctx.state_file)
                 logger.info("[Telegram] Бот удалён из чата %s — снято подписок: %s", chat_id, n)
             if ctx.admin_chat_id:
                 title = getattr(update.chat, "title", None) or str(chat_id)

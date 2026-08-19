@@ -1,8 +1,16 @@
 """State storage: bot_state.json — known_comments and notification_targets (список чатов/топиков)."""
+import contextlib
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable, TypeVar
+
+try:
+    import fcntl
+except ImportError:  # Windows — локальная разработка; на Railway (Linux) блокировка есть
+    fcntl = None  # type: ignore
+
+T = TypeVar("T")
 
 
 def _default_state(tracked_user: str = "") -> dict[str, Any]:
@@ -15,35 +23,36 @@ def _default_state(tracked_user: str = "") -> dict[str, Any]:
     }
 
 
-def load_state(state_file: str, tracked_user: str = "") -> dict[str, Any]:
-    """Load state from JSON; if file missing, return default. Поддерживает notification_targets (список) и миграцию со старого notification_target."""
+def _normalize_loaded_state(data: dict[str, Any], tracked_user: str = "") -> dict[str, Any]:
+    if "known_comments" not in data:
+        data["known_comments"] = {}
+    if "notification_targets" not in data:
+        old = data.get("notification_target")
+        if old and isinstance(old, dict) and old.get("chat_id") is not None and old.get("message_thread_id") is not None:
+            data["notification_targets"] = [{"chat_id": int(old["chat_id"]), "message_thread_id": int(old["message_thread_id"])}]
+        else:
+            data["notification_targets"] = []
+    if not isinstance(data["notification_targets"], list):
+        data["notification_targets"] = []
+    if "tracked_user" not in data and tracked_user:
+        data["tracked_user"] = tracked_user
+    if "initial_seed_done" not in data:
+        data["initial_seed_done"] = bool(data.get("known_comments"))
+    return data
+
+
+def _read_state_file(state_file: str, tracked_user: str = "") -> dict[str, Any]:
     if not os.path.isfile(state_file):
         return _default_state(tracked_user)
     try:
         with open(state_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if "known_comments" not in data:
-            data["known_comments"] = {}
-        if "notification_targets" not in data:
-            # Миграция: один старый notification_target → список из одного элемента
-            old = data.get("notification_target")
-            if old and isinstance(old, dict) and old.get("chat_id") is not None and old.get("message_thread_id") is not None:
-                data["notification_targets"] = [{"chat_id": int(old["chat_id"]), "message_thread_id": int(old["message_thread_id"])}]
-            else:
-                data["notification_targets"] = []
-        if not isinstance(data["notification_targets"], list):
-            data["notification_targets"] = []
-        if "tracked_user" not in data and tracked_user:
-            data["tracked_user"] = tracked_user
-        if "initial_seed_done" not in data:
-            data["initial_seed_done"] = bool(data.get("known_comments"))
-        return data
+        return _normalize_loaded_state(data, tracked_user)
     except (json.JSONDecodeError, OSError):
         return _default_state(tracked_user)
 
 
-def save_state(state: dict[str, Any], state_file: str) -> None:
-    """Write state to JSON atomically (temp file + rename)."""
+def _write_state_file(state: dict[str, Any], state_file: str) -> None:
     dirpath = os.path.dirname(os.path.abspath(state_file))
     if dirpath:
         os.makedirs(dirpath, exist_ok=True)
@@ -51,6 +60,61 @@ def save_state(state: dict[str, Any], state_file: str) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
     os.replace(tmp, state_file)
+
+
+@contextlib.contextmanager
+def _state_lock(state_file: str):
+    lock_path = state_file + ".lock"
+    dirpath = os.path.dirname(os.path.abspath(state_file))
+    if dirpath:
+        os.makedirs(dirpath, exist_ok=True)
+    lock_f = open(lock_path, "w", encoding="utf-8")
+    try:
+        if fcntl is not None:
+            fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        if fcntl is not None:
+            fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
+        lock_f.close()
+
+
+def update_state(
+    state_file: str,
+    tracked_user: str,
+    mutator: Callable[[dict[str, Any]], T],
+) -> T:
+    """Атомарно: load → mutator → save под файловой блокировкой (защита от гонок потоков)."""
+    with _state_lock(state_file):
+        state = _read_state_file(state_file, tracked_user)
+        result = mutator(state)
+        _write_state_file(state, state_file)
+        return result
+
+
+def load_state(state_file: str, tracked_user: str = "") -> dict[str, Any]:
+    """Load state from JSON; if file missing, return default. Поддерживает notification_targets (список) и миграцию со старого notification_target."""
+    return _read_state_file(state_file, tracked_user)
+
+
+def save_state(state: dict[str, Any], state_file: str) -> None:
+    """Write state to JSON atomically. Предпочитайте update_state при изменениях из нескольких потоков."""
+    _write_state_file(state, state_file)
+
+
+def persist_known_comment(
+    state_file: str,
+    tracked_user: str,
+    work_id: str,
+    comment_hash: str,
+) -> None:
+    """Запомнить отправленный комментарий и сразу сохранить на диск."""
+
+    def _mutator(state: dict[str, Any]) -> None:
+        add_known_comment(state, work_id, comment_hash)
+        state["last_check_timestamp"] = datetime.now(tz=timezone.utc).isoformat()
+
+    update_state(state_file, tracked_user, _mutator)
 
 
 def is_comment_known(state: dict[str, Any], work_id: str, comment_hash: str) -> bool:

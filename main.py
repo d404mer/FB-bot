@@ -29,10 +29,12 @@ def main() -> None:
     )
 
     state_file = cfg["STATE_FILE"]
-    # Ensure state exists with defaults
-    state = state_manager.load_state(state_file, cfg["AO3_USERNAME"])
-    state["tracked_user"] = cfg["AO3_USERNAME"]
-    state_manager.save_state(state, state_file)
+    ao3_user = cfg["AO3_USERNAME"]
+
+    def _ensure_tracked_user(state: dict) -> None:
+        state["tracked_user"] = ao3_user
+
+    state_manager.update_state(state_file, ao3_user, _ensure_tracked_user)
 
     bot_ctx = bot_client.BotRuntimeContext(
         state_file=state_file,
@@ -82,12 +84,14 @@ def main() -> None:
             new_count = 0
             # Первый запуск: запомнить все текущие комментарии без отправки — отправляем только те, что появятся после запуска бота
             if not state.get("initial_seed_done"):
-                for c in comments:
-                    ch = c.get("comment_id") or utils.comment_hash(c["author"], c["date"], c["text"])
-                    state_manager.add_known_comment(state, c["work_id"], ch)
-                state["initial_seed_done"] = True
-                state["last_check_timestamp"] = datetime.now(tz=timezone.utc).isoformat()
-                state_manager.save_state(state, state_file)
+                def _seed(state: dict) -> None:
+                    for c in comments:
+                        ch = c.get("comment_id") or utils.comment_hash(c["author"], c["date"], c["text"])
+                        state_manager.add_known_comment(state, c["work_id"], ch)
+                    state["initial_seed_done"] = True
+                    state["last_check_timestamp"] = datetime.now(tz=timezone.utc).isoformat()
+
+                state_manager.update_state(state_file, ao3_user, _seed)
                 logger.info("[Цикл] Первый запуск: запомнены все текущие комментарии (%s). Уведомления только о новых (после запуска).", len(comments))
             else:
                 for c in comments:
@@ -107,12 +111,16 @@ def main() -> None:
                             sent_any = True
                         time.sleep(NOTIFICATION_DELAY_SECONDS)
                     if sent_any:
+                        state_manager.persist_known_comment(state_file, ao3_user, c["work_id"], ch)
                         state_manager.add_known_comment(state, c["work_id"], ch)
                         logger.info("[Цикл] Уведомление отправлено во все подписанные топики")
                     else:
                         logger.warning("[Цикл] Не удалось отправить уведомление ни в один топик")
-                state["last_check_timestamp"] = datetime.now(tz=timezone.utc).isoformat()
-                state_manager.save_state(state, state_file)
+                if new_count == 0:
+                    def _touch_timestamp(state: dict) -> None:
+                        state["last_check_timestamp"] = datetime.now(tz=timezone.utc).isoformat()
+
+                    state_manager.update_state(state_file, ao3_user, _touch_timestamp)
             logger.info("[Цикл] Состояние сохранено, следующий цикл через %s с", cfg["CHECK_INTERVAL"])
             if new_count:
                 logger.info("[Цикл] Обработано новых комментариев: %s", new_count)

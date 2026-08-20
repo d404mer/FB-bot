@@ -97,14 +97,14 @@ def load_config(path: str | None = None) -> dict:
 
     admin_status_raw = (
         _env("ADMIN_STATUS_INTERVAL")
-        or (get("ADMIN", "STATUS_INTERVAL", "3600") if has_ini else "3600")
-        or "3600"
+        or (get("ADMIN", "STATUS_INTERVAL", "0") if has_ini else "0")
+        or "0"
     ).strip()
 
     try:
         check_interval = int(check_interval_raw) if check_interval_raw else 180
         request_delay = int(request_delay_raw) if request_delay_raw else 4
-        admin_status_interval = int(admin_status_raw) if admin_status_raw else 3600
+        admin_status_interval = int(admin_status_raw) if admin_status_raw else 0
     except ValueError:
         print("CHECK_INTERVAL, REQUEST_DELAY and ADMIN_STATUS_INTERVAL must be integers.")
         sys.exit(1)

@@ -42,7 +42,7 @@ def main() -> None:
         ao3_username=cfg["AO3_USERNAME"],
         admin_username=cfg.get("ADMIN_TELEGRAM_USERNAME"),
         admin_user_id=cfg.get("ADMIN_TELEGRAM_USER_ID"),
-        admin_status_interval_sec=int(cfg.get("ADMIN_STATUS_INTERVAL", 3600)),
+        admin_status_interval_sec=int(cfg.get("ADMIN_STATUS_INTERVAL", 0)),
         telegram_proxy_url=cfg.get("TELEGRAM_PROXY_URL"),
     )
     bot = bot_client.init_bot(cfg["BOT_TOKEN"], bot_ctx)
@@ -56,6 +56,13 @@ def main() -> None:
     ao3_session = ao3_parser.create_ao3_session(cfg["AO3_USERNAME"], cfg["AO3_PASSWORD"])
     if ao3_session is None:
         logger.error("Не удалось войти в AO3. Проверьте USERNAME и PASSWORD в config.ini.")
+        bot_client.notify_admin_error(
+            bot,
+            bot_ctx,
+            "ao3_login",
+            "Не удалось войти в AO3 при старте. Проверьте AO3_USERNAME и AO3_PASSWORD.",
+            cooldown_sec=0,
+        )
         sys.exit(1)
     logger.info("[AO3] Вход выполнен один раз на всю сессию; сессия будет использоваться до завершения программы")
 
@@ -69,6 +76,12 @@ def main() -> None:
             )
             if raw is None:
                 logger.warning("[Цикл] Inbox недоступен (сеть/сессия?), пропуск цикла")
+                bot_client.notify_admin_error(
+                    bot,
+                    bot_ctx,
+                    "inbox_unavailable",
+                    "Inbox AO3 недоступен (сеть, сессия или ошибка загрузки). Цикл пропущен.",
+                )
                 time.sleep(cfg["CHECK_INTERVAL"])
                 continue
             comments = [c for c in raw if c.get("notification_type") == "comment"]
@@ -128,6 +141,12 @@ def main() -> None:
                             )
                     else:
                         logger.warning("[Цикл] Не удалось отправить уведомление ни в один топик")
+                        bot_client.notify_admin_error(
+                            bot,
+                            bot_ctx,
+                            "telegram_send_failed",
+                            f"Не удалось отправить уведомление в Telegram (работа {c['work_id']}, автор {c['author']}).",
+                        )
                 if new_count == 0:
                     def _touch_timestamp(state: dict) -> None:
                         state["last_check_timestamp"] = datetime.now(tz=timezone.utc).isoformat()
@@ -138,6 +157,12 @@ def main() -> None:
                 logger.info("[Цикл] Обработано новых комментариев: %s", new_count)
         except Exception as e:
             logger.exception("Ошибка в цикле проверки: %s", e)
+            bot_client.notify_admin_error(
+                bot,
+                bot_ctx,
+                "cycle_exception",
+                f"Ошибка в цикле проверки: {e}",
+            )
             time.sleep(ERROR_PAUSE_SECONDS)
             continue
         time.sleep(cfg["CHECK_INTERVAL"])

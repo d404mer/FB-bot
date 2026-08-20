@@ -21,6 +21,9 @@ TELEGRAM_CONNECT_TIMEOUT = 15
 TELEGRAM_READ_TIMEOUT = 60
 TELEGRAM_SEND_MAX_ATTEMPTS = 3
 TELEGRAM_NETWORK_RETRY_DELAY = 8
+ADMIN_ERROR_COOLDOWN_SEC = 900
+
+_admin_error_last_sent: dict[str, float] = {}
 
 
 @dataclass(frozen=True)
@@ -136,13 +139,13 @@ def _is_global_admin(ctx: BotRuntimeContext, message: telebot.types.Message) -> 
 def _resolve_admin_chat(bot: telebot.TeleBot, ctx: BotRuntimeContext) -> None:
     if ctx.admin_user_id is not None:
         ctx.admin_chat_id = ctx.admin_user_id
-        logger.info("[Admin] ЛС-отчёты: chat_id из ADMIN_TELEGRAM_USER_ID=%s", ctx.admin_chat_id)
+        logger.info("[Admin] ЛС: chat_id=%s (уведомления об ошибках; /status и /topics по запросу)", ctx.admin_chat_id)
         return
     if ctx.admin_username:
         try:
             ch = bot.get_chat(f"@{ctx.admin_username}")
             ctx.admin_chat_id = ch.id
-            logger.info("[Admin] ЛС-отчёты: разрешён @%s → chat_id=%s", ctx.admin_username, ctx.admin_chat_id)
+            logger.info("[Admin] ЛС: @%s → chat_id=%s (уведомления об ошибках; /status и /topics по запросу)", ctx.admin_username, ctx.admin_chat_id)
         except Exception as e:
             logger.warning(
                 "[Admin] Не удалось get_chat @%s: %s — укажите числовой TELEGRAM_USER_ID в [ADMIN] config.ini "
@@ -151,7 +154,7 @@ def _resolve_admin_chat(bot: telebot.TeleBot, ctx: BotRuntimeContext) -> None:
                 e,
             )
     else:
-        logger.info("[Admin] ADMIN_TELEGRAM_USERNAME / ADMIN_TELEGRAM_USER_ID не заданы — ЛС-отчёты отключены")
+        logger.info("[Admin] ADMIN_TELEGRAM_USERNAME / ADMIN_TELEGRAM_USER_ID не заданы — ЛС-уведомления отключены")
 
 
 def _subscribe_current_topic(bot: telebot.TeleBot, message: telebot.types.Message, ctx: BotRuntimeContext) -> None:
@@ -390,6 +393,30 @@ def _format_targets_overview(bot: telebot.TeleBot, ctx: BotRuntimeContext) -> st
     return "\n".join(lines).strip()
 
 
+def notify_admin_error(
+    bot: telebot.TeleBot,
+    ctx: BotRuntimeContext,
+    key: str,
+    message: str,
+    *,
+    cooldown_sec: int = ADMIN_ERROR_COOLDOWN_SEC,
+) -> None:
+    """Отправить админу в ЛС сообщение об ошибке (не чаще cooldown_sec для одного key)."""
+    if ctx.admin_chat_id is None:
+        return
+    now = time.time()
+    last = _admin_error_last_sent.get(key, 0.0)
+    if now - last < cooldown_sec:
+        return
+    _admin_error_last_sent[key] = now
+    text = "<b>⚠️ Ошибка бота</b>\n\n" + escape_html(message)
+    try:
+        bot.send_message(ctx.admin_chat_id, text, parse_mode="HTML")
+        logger.info("[Admin] Отправлено уведомление об ошибке (%s)", key)
+    except Exception as e:
+        logger.warning("[Admin] Не удалось отправить уведомление об ошибке: %s", e)
+
+
 def _send_vps_status(bot: telebot.TeleBot, ctx: BotRuntimeContext) -> None:
     if ctx.admin_chat_id is None:
         return
@@ -428,6 +455,7 @@ def register_handlers(bot: telebot.TeleBot) -> None:
                     "Команды глобального админа в ЛС:\n"
                     "/status — снимок VPS и число подписок\n"
                     "/topics — все топики для уведомлений\n\n"
+                    "Авто-отчёты VPS отключены; в ЛС приходят только ошибки.\n\n"
                     "В группе (админ чата):\n"
                     "/notify_here — подписать текущий топик\n"
                     "/notify_off — отписать топик\n"
@@ -510,6 +538,11 @@ def start_polling(bot: telebot.TeleBot) -> None:
     register_handlers(bot)
 
     if ctx.admin_status_interval_sec > 0 and ctx.admin_chat_id is not None:
+        logger.warning(
+            "[Admin] ADMIN_STATUS_INTERVAL=%s — периодический отчёт VPS включён (устарело; задайте 0, "
+            "чтобы слать в ЛС только ошибки)",
+            ctx.admin_status_interval_sec,
+        )
         t = threading.Thread(target=_admin_status_loop, args=(bot, ctx), daemon=True)
         t.start()
     elif ctx.admin_status_interval_sec > 0:

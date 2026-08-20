@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+import requests
 import telebot
 from telebot import apihelper as tele_apihelper
 from telebot.apihelper import ApiTelegramException
@@ -15,6 +16,23 @@ import host_status
 from utils import escape_html
 
 logger = logging.getLogger(__name__)
+
+TELEGRAM_CONNECT_TIMEOUT = 15
+TELEGRAM_READ_TIMEOUT = 60
+TELEGRAM_SEND_MAX_ATTEMPTS = 3
+TELEGRAM_NETWORK_RETRY_DELAY = 8
+
+
+@dataclass(frozen=True)
+class SendResult:
+    """delivered — Telegram подтвердил; assume_delivered — таймаут после повторов (сообщение могло уйти)."""
+
+    delivered: bool = False
+    assume_delivered: bool = False
+
+    @property
+    def should_mark_known(self) -> bool:
+        return self.delivered or self.assume_delivered
 
 
 @dataclass
@@ -55,11 +73,34 @@ def _apply_telegram_proxy(proxy_url: str | None) -> None:
         tele_apihelper.proxy = None
 
 
+def _classify_network_error(exc: BaseException) -> str:
+    """
+    read_timeout — запрос мог дойти до Telegram, ответ не дождались; повторная send_message опасна.
+    connection — до сервера не достучались; повтор безопасен.
+    """
+    if isinstance(exc, requests.exceptions.ReadTimeout):
+        return "read_timeout"
+    if isinstance(exc, requests.exceptions.ConnectTimeout):
+        return "connection"
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return "connection"
+    msg = str(exc).lower()
+    if "read timed out" in msg or "read operation timed out" in msg:
+        return "read_timeout"
+    if "connect timed out" in msg or "connection refused" in msg or "connection aborted" in msg:
+        return "connection"
+    if "timed out" in msg or "timeout" in msg:
+        return "read_timeout"
+    return "other"
+
+
 def init_bot(
     token: str,
     ctx: BotRuntimeContext,
 ) -> telebot.TeleBot:
     _apply_telegram_proxy(ctx.telegram_proxy_url)
+    tele_apihelper.CONNECT_TIMEOUT = TELEGRAM_CONNECT_TIMEOUT
+    tele_apihelper.READ_TIMEOUT = TELEGRAM_READ_TIMEOUT
     bot = telebot.TeleBot(token)
     bot.wtf_ctx = ctx  # type: ignore[attr-defined]
     return bot
@@ -263,14 +304,14 @@ def send_comment_notification(
     message_thread_id: int,
     comment_data: dict[str, Any],
     bot: telebot.TeleBot | None = None,
-) -> bool:
+) -> SendResult:
     """Отправить уведомление в топик. Если bot=None — берётся последний init_bot (через текущий процесс — передайте bot из main)."""
     tb = bot or getattr(send_comment_notification, "_last_bot", None)  # type: ignore[attr-defined]
     if tb is None:
         raise RuntimeError("TeleBot not passed and no default bot bound.")
     text = _format_notification(comment_data)
-    max_retries = 3
-    for attempt in range(max_retries):
+    work_id = comment_data.get("work_id")
+    for attempt in range(TELEGRAM_SEND_MAX_ATTEMPTS):
         try:
             tb.send_message(
                 chat_id=chat_id,
@@ -278,8 +319,8 @@ def send_comment_notification(
                 text=text,
                 parse_mode="HTML",
             )
-            logger.info("[Telegram] Уведомление отправлено: работа %s", comment_data.get("work_id"))
-            return True
+            logger.info("[Telegram] Уведомление отправлено: работа %s", work_id)
+            return SendResult(delivered=True)
         except ApiTelegramException as e:
             if "retry after" in str(e).lower() or "flood" in str(e).lower():
                 retry_after = getattr(e, "retry_after", 30) or 30
@@ -287,11 +328,38 @@ def send_comment_notification(
                 time.sleep(retry_after)
                 continue
             logger.exception("Telegram API error sending notification: %s", e)
-            return False
+            return SendResult()
         except Exception as e:
+            net_kind = _classify_network_error(e)
+            if net_kind == "read_timeout":
+                logger.warning(
+                    "[Telegram] Read timeout (работа %s) — повтор не делаем (сообщение могло уже уйти): %s",
+                    work_id,
+                    e,
+                )
+                return SendResult(assume_delivered=True)
+            if net_kind == "connection":
+                if attempt < TELEGRAM_SEND_MAX_ATTEMPTS - 1:
+                    logger.warning(
+                        "[Telegram] Ошибка соединения (работа %s), повтор через %s с (%s/%s): %s",
+                        work_id,
+                        TELEGRAM_NETWORK_RETRY_DELAY,
+                        attempt + 2,
+                        TELEGRAM_SEND_MAX_ATTEMPTS,
+                        e,
+                    )
+                    time.sleep(TELEGRAM_NETWORK_RETRY_DELAY)
+                    continue
+                logger.warning(
+                    "[Telegram] Не удалось подключиться к Telegram после %s попыток (работа %s): %s",
+                    TELEGRAM_SEND_MAX_ATTEMPTS,
+                    work_id,
+                    e,
+                )
+                return SendResult()
             logger.exception("Error sending notification: %s", e)
-            return False
-    return False
+            return SendResult()
+    return SendResult()
 
 
 def bind_notifier_bot(bot: telebot.TeleBot) -> None:

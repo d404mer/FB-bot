@@ -105,15 +105,27 @@ def main() -> None:
                         continue
                     logger.info("[Цикл] Новый комментарий: работа %s, автор %s", c["work_id"], c["author"])
                     sent_any = False
+                    delivered_any = False
+                    assumed_any = False
                     for chat_id, thread_id in targets:
-                        ok = bot_client.send_comment_notification(chat_id, thread_id, c)
-                        if ok:
+                        result = bot_client.send_comment_notification(chat_id, thread_id, c)
+                        if result.delivered:
                             sent_any = True
+                            delivered_any = True
+                        elif result.assume_delivered:
+                            sent_any = True
+                            assumed_any = True
                         time.sleep(NOTIFICATION_DELAY_SECONDS)
                     if sent_any:
                         state_manager.persist_known_comment(state_file, ao3_user, c["work_id"], ch)
                         state_manager.add_known_comment(state, c["work_id"], ch)
-                        logger.info("[Цикл] Уведомление отправлено во все подписанные топики")
+                        if delivered_any:
+                            logger.info("[Цикл] Уведомление отправлено во все подписанные топики")
+                        elif assumed_any:
+                            logger.info(
+                                "[Цикл] Комментарий помечен отправленным после таймаута Telegram (работа %s)",
+                                c["work_id"],
+                            )
                     else:
                         logger.warning("[Цикл] Не удалось отправить уведомление ни в один топик")
                 if new_count == 0:
